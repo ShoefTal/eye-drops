@@ -8,11 +8,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 
-val Brand = Color(0xFF1F6F8B)
-val Ink = Color(0xFF18232B)
-val Muted = Color(0xFF5D6B75)
-val Line = Color(0xFFD5DDE2)
-val Bg = Color(0xFFEEF2F4)
+val Brand = Color(0xFF2E6B47)
+val Ink = Color(0xFF17261C)
+val Muted = Color(0xFF4A5A4F)
+val Line = Color(0xFFD3DDD5)
+val Bg = Color(0xFFF3F6F2)
 val Warn = Color(0xFFB4530F)
 val Ok = Color(0xFF2E7D4F)
 val OkSoft = Color(0xFFDCEFE3)

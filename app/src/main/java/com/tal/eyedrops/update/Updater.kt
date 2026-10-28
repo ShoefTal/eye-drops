@@ -99,7 +99,7 @@ object Updater {
             return "יש גרסה חדשה ($name). צריך קודם לאשר עדכונים בהגדרות."
         }
         val apk = File(c.cacheDir, "update.apk")
-        get("$base/${info.optString("apk", "DropTime.apk")}").inputStream.use { inp -> apk.outputStream().use { inp.copyTo(it) } }
+        get("$base/${info.optString("apk", "Toma.apk")}").inputStream.use { inp -> apk.outputStream().use { inp.copyTo(it) } }
         val expected = info.optString("sha256", "")
         val actual = MessageDigest.getInstance("SHA-256").digest(apk.readBytes()).joinToString("") { String.format(java.util.Locale.US, "%02x", it) }
         if (expected.isNotEmpty() && !expected.equals(actual, ignoreCase = true)) {
@@ -160,7 +160,7 @@ class UpdateReceiver : BroadcastReceiver() {
                         // Works when the app is open; otherwise the notification lets the user start it.
                         runCatching { c.startActivity(confirm) }
                         val tap = PendingIntent.getActivity(c, 77, confirm, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                        Updater.notify(c, "עדכון מוכן להתקנה", "לחץ כאן כדי לעדכן את טיפות", tap)
+                        Updater.notify(c, "עדכון מוכן להתקנה", "לחץ כאן כדי לעדכן את Toma", tap)
                     }
                     PackageInstaller.STATUS_SUCCESS -> Unit
                     else -> Updater.notify(c, "העדכון לא הותקן", intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "", null)

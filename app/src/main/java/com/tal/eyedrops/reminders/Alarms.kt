@@ -18,6 +18,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.tal.eyedrops.R
 import com.tal.eyedrops.data.Fmt
+import com.tal.eyedrops.data.Dose
+import com.tal.eyedrops.data.Med
+import com.tal.eyedrops.data.MedType
 import com.tal.eyedrops.data.Schedule
 import com.tal.eyedrops.data.Store
 import com.tal.eyedrops.ui.MainActivity
@@ -64,14 +67,14 @@ object Alarms {
             .build()
         val vib = longArrayOf(0, 400, 200, 400, 200, 400)
         nm.createNotificationChannel(
-            NotificationChannel(soundChannel(), "טיפות – התראה קולית", NotificationManager.IMPORTANCE_HIGH).apply {
+            NotificationChannel(soundChannel(), "תרופות – התראה קולית", NotificationManager.IMPORTANCE_HIGH).apply {
                 setSound(alarmTone, attrs)
                 enableVibration(true)
                 vibrationPattern = vib
             }
         )
         nm.createNotificationChannel(
-            NotificationChannel(CH_QUIET, "טיפות – התראה שקטה (רטט)", NotificationManager.IMPORTANCE_HIGH).apply {
+            NotificationChannel(CH_QUIET, "תרופות – התראה שקטה (רטט)", NotificationManager.IMPORTANCE_HIGH).apply {
                 setSound(null, null)
                 enableVibration(true)
                 vibrationPattern = vib
@@ -132,16 +135,13 @@ object Alarms {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(c, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
-        val eyes = Store.eyeNames()
         val doses = Schedule.dosesAt(slot).filter { !Store.isDone(it) }
         if (doses.isEmpty()) return
         val byMed = doses.groupBy { it.med.id }.values.toList()
-        val lines = byMed.mapIndexed { i, ds ->
-            val who = if (eyes.size > 1) " (" + ds.joinToString(", ") { eyes.getOrElse(it.eye) { "" } } + ")" else ""
-            "${i + 1}. ${ds.first().med.name}$who"
-        }
-        val body = lines.joinToString("\n") + if (byMed.size > 1) "\n5 דקות בין טיפה לטיפה" else ""
-        val title = "טיפות ${Fmt.time(slot.toLocalTime())}" + if (repeat > 0) " · תזכורת" else ""
+        val lines = byMed.mapIndexed { i, ds -> "${i + 1}. " + doseLine(ds) }
+        val drops = byMed.count { it.first().med.type == MedType.DROPS }
+        val body = lines.joinToString("\n") + if (drops > 1) "\n5 דקות בין טיפה לטיפה" else ""
+        val title = "Toma ${Fmt.time(slot.toLocalTime())}" + if (repeat > 0) " · תזכורת" else ""
         val n = NotificationCompat.Builder(c, if (Store.soundOn()) soundChannel() else CH_QUIET)
             .setSmallIcon(R.drawable.ic_drop)
             .setContentTitle(title)
@@ -176,8 +176,8 @@ object Alarms {
         ) return
         val n = NotificationCompat.Builder(c, if (Store.soundOn()) soundChannel() else CH_QUIET)
             .setSmallIcon(R.drawable.ic_drop)
-            .setContentTitle("בדיקה: טיפות ${Fmt.time(LocalDateTime.now().toLocalTime())}")
-            .setContentText("כך תיראה ותישמע התראה של טיפות")
+            .setContentTitle("בדיקה: Toma ${Fmt.time(LocalDateTime.now().toLocalTime())}")
+            .setContentText("כך תיראה ותישמע התראה")
             .setStyle(NotificationCompat.BigTextStyle().bigText(testBody()))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -193,6 +193,32 @@ object Alarms {
         val names = Store.plan().meds.map { it.name }
         return (if (names.isEmpty()) "" else names.mapIndexed { i, n -> "${i + 1}. $n" }.joinToString("\n") + "\n") +
             "זו התראת בדיקה בלבד."
+    }
+
+    /** "Sterodex · 1 טיפה · עין ימין, עין שמאל" — what to take for one med at one time. */
+    fun doseLine(ds: List<Dose>): String {
+        val m = ds.first().med
+        val parts = mutableListOf(m.name)
+        m.doseText().takeIf { it.isNotEmpty() }?.let { parts.add(it) }
+        val sites = ds.mapNotNull { Store.siteFor(it) }.distinct()
+        if (sites.isNotEmpty()) parts.add(sites.joinToString(", "))
+        if (m.note.isNotBlank()) parts.add(m.note)
+        return parts.joinToString(" · ")
+    }
+
+    fun notifyRefill(c: Context, m: Med) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(c, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val left = Store.stock(m.id)?.let { Fmt.num(maxOf(0.0, it)) } ?: "?"
+        val n = NotificationCompat.Builder(c, CH_QUIET)
+            .setSmallIcon(R.drawable.ic_drop)
+            .setContentTitle("${m.name}: הגיע הזמן לחדש")
+            .setContentText("נשארו $left ${m.type.unit}".trim())
+            .setContentIntent(openApp(c, m.id.hashCode()))
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(c).notify(m.id.hashCode(), n)
     }
 
     fun followUpsAllowed() = Store.followUp()
@@ -226,7 +252,7 @@ class AlarmReceiver : BroadcastReceiver() {
             Alarms.ACTION_DONE -> {
                 slot ?: return
                 if (slot.year == 2000) { NotificationManagerCompat.from(c).cancel(777); return }
-                Store.setDone(Schedule.dosesAt(slot), true)
+                Store.setDone(Schedule.dosesAt(slot).filter { it.med.type != MedType.MEASURE }, true).forEach { Alarms.notifyRefill(c, it) }
                 Alarms.cancelNotification(c, slot)
             }
             Alarms.ACTION_SNOOZE -> {

@@ -20,7 +20,7 @@
         android:roundIcon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.EyeDrops">
+        android:theme="@style/Theme.Toma">
 
         <activity
             android:name=".ui.MainActivity"

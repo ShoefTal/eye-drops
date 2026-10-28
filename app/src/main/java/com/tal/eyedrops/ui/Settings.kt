@@ -76,7 +76,7 @@ fun SettingsScreen() {
             Text("הגדרות", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink)
         }
 
-        Section("תוכנית הטיפות") {
+        Section("התוכנית") {
             if (plan.meds.isEmpty()) Text("עוד אין תרופות.", color = Muted)
             plan.meds.forEachIndexed { i, m ->
                 Row(
@@ -88,11 +88,16 @@ fun SettingsScreen() {
                     Column(Modifier.weight(1f)) {
                         Text("${i + 1}. ${m.name}", color = Ink, fontWeight = FontWeight.SemiBold)
                         val first = m.stages.minOfOrNull { it.start }; val last = m.stages.maxOfOrNull { it.end }
-                        val eyes = if (plan.eyes.size > 1) " · " + m.eyes.mapNotNull { plan.eyes.getOrNull(it) }.joinToString("+") else ""
-                        if (first != null && last != null) Text(
-                            "${Fmt.date(first)}–${Fmt.dateYear(last)} · ${m.stages.size} שלבים$eyes",
-                            color = Muted, fontSize = 13.sp,
-                        )
+                        val sub = buildList {
+                            add(m.type.label)
+                            if (m.prn != null) add("לפי הצורך")
+                            else if (first != null && last != null) add("${Fmt.date(first)}–${Fmt.dateYear(last)}")
+                            Store.stock(m.id)?.let { add("מלאי ${Fmt.num(it)}") }
+                        }.joinToString(" · ")
+                        Text(sub, color = Muted, fontSize = 13.sp)
+                        if (m.type == com.tal.eyedrops.data.MedType.MEASURE) TextButton(onClick = { Nav.screen = Screen.History(m.id) }) {
+                            Text("היסטוריה")
+                        }
                     }
                     IconButton(onClick = { Store.moveMed(m.id, -1); Alarms.scheduleNext(ctx) }, enabled = i > 0) {
                         Icon(Icons.Filled.KeyboardArrowUp, "הזז למעלה", tint = if (i > 0) Ink else Line)
@@ -102,25 +107,11 @@ fun SettingsScreen() {
                     }
                 }
             }
-            if (plan.meds.size > 1) Text("הסדר ברשימה הוא סדר הטיפות באותה שעה.", color = Muted, fontSize = 12.sp)
-            Button(onClick = { Nav.screen = Screen.Edit(null) }) { Text("הוסף תרופה") }
+            if (plan.meds.size > 1) Text("הסדר ברשימה הוא הסדר באותה שעה.", color = Muted, fontSize = 12.sp)
+            Button(onClick = { Nav.screen = Screen.Edit(null) }) { Text("הוסף תרופה או מדידה") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { sharePlan(ctx) }) { Text("שלח תוכנית") }
                 OutlinedButton(onClick = { importFromClipboard(ctx) }) { Text("קבל תוכנית") }
-            }
-        }
-
-        Section("עיניים") {
-            Segmented(listOf("עין אחת", "שתי עיניים"), plan.eyes.size - 1) {
-                val names = if (it == 0) listOf(plan.eyes[0]) else listOf(plan.eyes[0], if (plan.eyes[0] == "ימין") "שמאל" else "ימין")
-                Store.setEyes(names); Alarms.scheduleNext(ctx)
-            }
-            if (plan.eyes.size == 1) {
-                Segmented(listOf("ימין", "שמאל"), if (plan.eyes[0] == "שמאל") 1 else 0) {
-                    Store.setEyes(listOf(if (it == 0) "ימין" else "שמאל"))
-                }
-            } else {
-                Text("בשתי עיניים בוחרים לכל תרופה לאיזו עין היא, ומסמנים כל עין בנפרד.", color = Muted, fontSize = 13.sp)
             }
         }
 
@@ -192,7 +183,7 @@ private fun ToneRow(ctx: Context) {
         OutlinedButton(onClick = {
             val i = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
                 .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
-                .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "צלצול לטיפות")
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "צלצול לתזכורות")
                 .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
                 .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
                 .putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, Alarms.defaultTone())

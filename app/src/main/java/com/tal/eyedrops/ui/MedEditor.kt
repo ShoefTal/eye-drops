@@ -53,7 +53,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tal.eyedrops.data.Fmt
 import com.tal.eyedrops.data.Med
+import com.tal.eyedrops.data.MedType
 import com.tal.eyedrops.data.Palette
+import com.tal.eyedrops.data.Prn
 import com.tal.eyedrops.data.Schedule
 import com.tal.eyedrops.data.Stage
 import com.tal.eyedrops.data.Store
@@ -61,6 +63,8 @@ import com.tal.eyedrops.reminders.Alarms
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.UUID
+
+private fun parseNum(s: String): Double? = s.replace(',', '.').toDoubleOrNull()
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -70,26 +74,65 @@ fun MedEditor(medId: String?) {
     val existing = medId?.let { id -> plan.meds.firstOrNull { it.id == id } }
 
     var name by remember { mutableStateOf(existing?.name ?: "") }
+    var type by remember { mutableStateOf(existing?.type ?: MedType.DROPS) }
     var color by remember {
         mutableStateOf(existing?.color ?: (Palette.indices.firstOrNull { c -> plan.meds.none { it.color == c } } ?: 0))
     }
-    var eyes by remember { mutableStateOf(existing?.eyes ?: plan.eyes.indices.toList()) }
+    var amountText by remember { mutableStateOf(existing?.amount?.let { Fmt.num(it) } ?: "1") }
+    var note by remember { mutableStateOf(existing?.note ?: "") }
+    // drops: target organ + side
+    val oldSite = existing?.sites?.firstOrNull() ?: ""
+    var target by remember { mutableStateOf(Fmt.dropTargets.firstOrNull { oldSite.startsWith(it) } ?: if (existing == null) "עין" else "") }
+    var side by remember {
+        mutableStateOf(
+            when {
+                (existing?.sites?.size ?: 0) > 1 -> 2
+                oldSite.endsWith("שמאל") -> 1
+                else -> 0
+            }
+        )
+    }
+    val rotation = remember { mutableStateListOf<String>().apply { addAll(existing?.rotation ?: emptyList()) } }
+    var prnMode by remember { mutableStateOf(existing?.prn != null) }
+    var minHoursText by remember { mutableStateOf((existing?.prn?.minHours ?: 6).toString()) }
+    var maxDayText by remember { mutableStateOf((existing?.prn?.maxPerDay ?: 0).let { if (it == 0) "" else it.toString() }) }
+    var stockText by remember { mutableStateOf(existing?.id?.let { Store.stock(it) }?.let { Fmt.num(it) } ?: "") }
+    var refillText by remember { mutableStateOf(existing?.refillAt?.let { Fmt.num(it) } ?: "") }
     val stages = remember {
         mutableStateListOf<Stage>().apply {
-            addAll(existing?.stages ?: listOf(Stage(LocalDate.now(), 7, Schedule.presetTimes(4))))
+            addAll(existing?.stages?.takeIf { it.isNotEmpty() } ?: listOf(Stage(LocalDate.now(), 7, Schedule.presetTimes(4))))
         }
     }
     var confirmDelete by remember { mutableStateOf(false) }
 
+    fun sitesNow(): List<String> {
+        if (type != MedType.DROPS || target.isEmpty()) return emptyList()
+        return when (side) { 0 -> listOf("$target ימין"); 1 -> listOf("$target שמאל"); else -> listOf("$target ימין", "$target שמאל") }
+    }
+
     fun save() {
         val n = name.trim()
+        val amount = if (type.unit.isEmpty()) 0.0 else parseNum(amountText) ?: -1.0
+        fun err(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
         when {
-            n.isEmpty() -> { Toast.makeText(ctx, "כתוב את שם התרופה", Toast.LENGTH_SHORT).show(); return }
-            stages.isEmpty() -> { Toast.makeText(ctx, "הוסף לפחות שלב אחד", Toast.LENGTH_SHORT).show(); return }
-            stages.any { it.times.isEmpty() } -> { Toast.makeText(ctx, "בכל שלב צריכה להיות לפחות שעה אחת", Toast.LENGTH_SHORT).show(); return }
+            n.isEmpty() -> return err("כתוב שם")
+            amount < 0 -> return err("כמות לא תקינה")
+            !prnMode && stages.isEmpty() -> return err("הוסף לפחות שלב אחד")
+            !prnMode && stages.any { it.times.isEmpty() } -> return err("בכל שלב צריכה להיות לפחות שעה אחת")
+            type.rotates && rotation.size == 1 -> return err("להחלפת מיקום בחר לפחות שני מקומות, או אף אחד")
         }
-        val eyeList = eyes.filter { it < plan.eyes.size }.ifEmpty { listOf(0) }
-        Store.upsertMed(Med(existing?.id ?: UUID.randomUUID().toString().take(8), n, color, eyeList, stages.sortedBy { it.start }))
+        val id = existing?.id ?: UUID.randomUUID().toString().take(8)
+        val med = Med(
+            id = id, name = n, color = color, type = type, amount = amount,
+            sites = sitesNow(),
+            rotation = if (type.rotates) rotation.toList() else emptyList(),
+            note = note.trim(),
+            stages = if (prnMode) emptyList() else stages.sortedBy { it.start },
+            prn = if (prnMode) Prn(minHoursText.toIntOrNull() ?: 0, maxDayText.toIntOrNull() ?: 0) else null,
+            refillAt = if (type.hasStock) parseNum(refillText) else null,
+        )
+        Store.upsertMed(med)
+        if (type.hasStock) Store.setStock(id, parseNum(stockText))
         Alarms.scheduleNext(ctx)
         Nav.screen = Screen.Settings
     }
@@ -100,15 +143,34 @@ fun MedEditor(medId: String?) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { Nav.screen = Screen.Settings }) { Icon(Icons.Filled.ArrowBack, "חזרה בלי לשמור", tint = Ink) }
-            Text(if (existing == null) "תרופה חדשה" else "עריכת תרופה", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink,
+            Text(if (existing == null) "חדש" else "עריכה", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink,
                 modifier = Modifier.weight(1f))
             Button(onClick = { save() }) { Text("שמור") }
         }
 
-        Section("תרופה") {
+        Section("מה") {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MedType.values().forEach { t -> QuickChip(t.label, selected = type == t) { type = t } }
+            }
             OutlinedTextField(
                 value = name, onValueChange = { name = it.take(60) },
-                label = { Text("שם התרופה") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                label = { Text(if (type == MedType.MEASURE) "מה מודדים (למשל לחץ דם)" else "שם התרופה") },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+            )
+            if (type.unit.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = amountText, onValueChange = { amountText = it.take(6) },
+                        label = { Text("כמות בכל פעם") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.width(150.dp),
+                    )
+                    Text(type.unit, color = Muted)
+                }
+            }
+            OutlinedTextField(
+                value = note, onValueChange = { note = it.take(200) },
+                label = { Text("הוראות (למשל: עם אוכל)") }, modifier = Modifier.fillMaxWidth(),
             )
             Text("צבע", color = Muted, fontSize = 13.sp)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -121,33 +183,91 @@ fun MedEditor(medId: String?) {
                     ) { if (i == color) Icon(Icons.Filled.Check, "נבחר", tint = Color.White, modifier = Modifier.size(18.dp)) }
                 }
             }
-            if (plan.eyes.size > 1) {
-                Text("לאיזו עין", color = Muted, fontSize = 13.sp)
-                Segmented(listOf(plan.eyes[0], plan.eyes[1], "שתיהן"), when (eyes.sorted()) { listOf(0) -> 0; listOf(1) -> 1; else -> 2 }) {
-                    eyes = when (it) { 0 -> listOf(0); 1 -> listOf(1); else -> listOf(0, 1) }
+        }
+
+        if (type == MedType.DROPS) {
+            Section("לאן") {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (Fmt.dropTargets + "").forEach { t -> QuickChip(if (t.isEmpty()) "בלי" else t, selected = target == t) { target = t } }
+                }
+                if (target.isNotEmpty()) {
+                    Segmented(listOf("ימין", "שמאל", "שתיהן"), side) { side = it }
+                    if (side == 2) Text("בכל פעם יופיעו שני סימונים, אחד לכל צד.", color = Muted, fontSize = 13.sp)
                 }
             }
         }
 
-        stages.forEachIndexed { idx, st ->
-            StageCard(
-                index = idx, stage = st, canDelete = stages.size > 1,
-                onChange = { stages[idx] = it },
-                onDelete = { stages.removeAt(idx) },
-            )
+        if (type.rotates) {
+            Section("החלפת מקום") {
+                Text("בחר את המקומות לפי הסדר. בכל פעם תופיע התזכורת עם המקום הבא בתור.", color = Muted, fontSize = 13.sp)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Fmt.rotationSites.forEach { site ->
+                        val idx = rotation.indexOf(site)
+                        QuickChip(if (idx >= 0) "${idx + 1}. $site" else site, selected = idx >= 0) {
+                            if (idx >= 0) rotation.removeAt(idx) else rotation.add(site)
+                        }
+                    }
+                }
+            }
         }
 
-        OutlinedButton(onClick = {
-            val last = stages.lastOrNull()
-            stages.add(
-                if (last == null) Stage(LocalDate.now(), 7, Schedule.presetTimes(4))
-                else Stage(last.end.plusDays(1), 7, last.times)
-            )
-        }, modifier = Modifier.fillMaxWidth()) { Text("הוסף שלב (למשל הורדת מינון)") }
+        Section("מתי") {
+            Segmented(listOf("בשעות קבועות", "לפי הצורך"), if (prnMode) 1 else 0) { prnMode = it == 1 }
+            if (prnMode) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = minHoursText, onValueChange = { minHoursText = it.filter(Char::isDigit).take(2) },
+                        label = { Text("שעות בין מנות") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = maxDayText, onValueChange = { maxDayText = it.filter(Char::isDigit).take(2) },
+                        label = { Text("מקסימום ביום") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
+                    )
+                }
+                Text("אין תזכורות. במסך הראשי יש כפתור \"לקחתי עכשיו\", והאפליקציה מראה מתי מותר שוב.", color = Muted, fontSize = 13.sp)
+            }
+        }
+
+        if (!prnMode) {
+            stages.forEachIndexed { idx, st ->
+                StageCard(
+                    index = idx, stage = st, canDelete = stages.size > 1,
+                    onChange = { stages[idx] = it },
+                    onDelete = { stages.removeAt(idx) },
+                )
+            }
+            OutlinedButton(onClick = {
+                val last = stages.lastOrNull()
+                stages.add(
+                    if (last == null) Stage(LocalDate.now(), 7, Schedule.presetTimes(4))
+                    else Stage(last.end.plusDays(1), 7, last.times)
+                )
+            }, modifier = Modifier.fillMaxWidth()) { Text("הוסף שלב (למשל הורדת מינון)") }
+        }
+
+        if (type.hasStock) {
+            Section("מלאי (לא חובה)") {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = stockText, onValueChange = { stockText = it.take(6) },
+                        label = { Text("יש עכשיו (${type.unit})") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = refillText, onValueChange = { refillText = it.take(6) },
+                        label = { Text("התראה כשנשארים") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
+                    )
+                }
+                Text("כל סימון \"בוצע\" מוריד מהמלאי. כשקונים חדש, מעדכנים כאן את הכמות.", color = Muted, fontSize = 13.sp)
+            }
+        }
 
         if (existing != null) {
             TextButton(onClick = { confirmDelete = true }, colors = ButtonDefaults.textButtonColors(contentColor = Warn)) {
-                Text("מחק את התרופה")
+                Text("מחק")
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -157,7 +277,7 @@ fun MedEditor(medId: String?) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("למחוק את ${existing.name}?") },
-            text = { Text("כל התזכורות של התרופה הזו יימחקו.") },
+            text = { Text("כל התזכורות שלה יימחקו.") },
             confirmButton = {
                 Button(onClick = {
                     Store.deleteMed(existing.id); Alarms.scheduleNext(ctx); confirmDelete = false
@@ -176,12 +296,10 @@ private fun StageCard(index: Int, stage: Stage, canDelete: Boolean, onChange: (S
     var daysText by remember(stage.days) { mutableStateOf(stage.days.toString()) }
 
     Section("שלב ${index + 1}") {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = {
-                DatePickerDialog(ctx, { _, y, m, d -> onChange(stage.copy(start = LocalDate.of(y, m + 1, d))) },
-                    stage.start.year, stage.start.monthValue - 1, stage.start.dayOfMonth).show()
-            }) { Text("מ־${Fmt.weekday(stage.start)} ${Fmt.dateYear(stage.start)}") }
-        }
+        OutlinedButton(onClick = {
+            DatePickerDialog(ctx, { _, y, m, d -> onChange(stage.copy(start = LocalDate.of(y, m + 1, d))) },
+                stage.start.year, stage.start.monthValue - 1, stage.start.dayOfMonth).show()
+        }) { Text("מ־${Fmt.weekday(stage.start)} ${Fmt.dateYear(stage.start)}") }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = daysText,
@@ -196,15 +314,22 @@ private fun StageCard(index: Int, stage: Stage, canDelete: Boolean, onChange: (S
             Text("עד ${Fmt.weekday(stage.end)} ${Fmt.dateYear(stage.end)}", color = Muted, fontSize = 14.sp)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(1 to "יום", 7 to "שבוע", 14 to "שבועיים", 21 to "3 שבועות").forEach { (d, label) ->
+            listOf(1 to "יום", 7 to "שבוע", 14 to "שבועיים", 30 to "חודש").forEach { (d, label) ->
                 QuickChip(label, selected = stage.days == d) { onChange(stage.copy(days = d)) }
             }
         }
 
-        Text("פעמים ביום (ממלא שעות אוטומטית, אפשר לשנות)", color = Muted, fontSize = 13.sp)
+        Text("פעמים ביום (ממלא שעות, אפשר לשנות)", color = Muted, fontSize = 13.sp)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(1, 2, 3, 4, 5, 6, 8).forEach { n ->
                 QuickChip("$n", selected = stage.times.size == n) { onChange(stage.copy(times = Schedule.presetTimes(n))) }
+            }
+        }
+        val first = stage.times.firstOrNull() ?: LocalTime.of(8, 0)
+        Text("או כל X שעות מסביב לשעון, החל מ־${Fmt.time(first)}", color = Muted, fontSize = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(4, 6, 8, 12).forEach { h ->
+                QuickChip("כל $h", selected = false) { onChange(stage.copy(times = Schedule.everyHours(h, first))) }
             }
         }
 

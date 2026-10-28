@@ -50,9 +50,9 @@ jobs:
 
       - name: Prepare files
         run: |
-          cp app/build/outputs/apk/release/app-release.apk DropTime.apk
-          sha=$(sha256sum DropTime.apk | cut -d' ' -f1)
-          printf '{"versionCode": %s, "versionName": "1.0.%s", "apk": "DropTime.apk", "sha256": "%s"}\n' \
+          cp app/build/outputs/apk/release/app-release.apk Toma.apk
+          sha=$(sha256sum Toma.apk | cut -d' ' -f1)
+          printf '{"versionCode": %s, "versionName": "1.0.%s", "apk": "Toma.apk", "sha256": "%s"}\n' \
             "${{ github.run_number }}" "${{ github.run_number }}" "$sha" > version.json
           rm -f keystore/eyedrops.jks
 
@@ -60,8 +60,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: DropTime 1.0.${{ github.run_number }}
+          name: Toma 1.0.${{ github.run_number }}
           files: |
-            DropTime.apk
+            Toma.apk
             version.json
           make_latest: true

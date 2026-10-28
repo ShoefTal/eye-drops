@@ -11,7 +11,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.tal.droptime"
+        applicationId = "com.tal.toma"
         minSdk = 26
         targetSdk = 35
         versionCode = buildNumber
