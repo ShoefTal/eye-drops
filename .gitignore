@@ -1,0 +1,10 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+
+# Secrets – never commit
+.env
+.dev.vars
