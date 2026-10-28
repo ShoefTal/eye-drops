@@ -331,6 +331,10 @@ private fun SettingsScreen(onBack: () -> Unit) {
             }
             if (eyes.size > 1) Text("התאריכים לפי העין הראשונה.", color = Muted, fontSize = 12.sp)
         }
+        Text(
+            "גרסה ${appVersion(ctx)}",
+            color = Muted, fontSize = 13.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+        )
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -355,6 +359,9 @@ private fun ReliabilityRow(ctx: Context) {
         }) { Text("אפשר התראות בזמן מדויק") }
     }
 }
+
+private fun appVersion(ctx: Context): String =
+    runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
 
 @Composable
 private fun ToneRow(ctx: Context) {
