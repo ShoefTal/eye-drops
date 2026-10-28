@@ -1,0 +1,13 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+
+# Secrets – never commit
+.env
+.dev.vars
+
+# signing key is stored encrypted (eyedrops.jks.enc)
+keystore/*.jks
