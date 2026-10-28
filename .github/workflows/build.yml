@@ -31,7 +31,10 @@ jobs:
           if [ -z "$KEYSTORE_PASSWORD" ]; then
             echo "::error::Missing repo secret KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)"; exit 1
           fi
-          openssl enc -d -aes-256-cbc -pbkdf2 -in keystore/eyedrops.jks.enc -out keystore/eyedrops.jks -pass env:KEYSTORE_PASSWORD
+          PW=$(printf %s "$KEYSTORE_PASSWORD" | tr -d '[:space:]')
+          if ! openssl enc -d -aes-256-cbc -pbkdf2 -in keystore/eyedrops.jks.enc -out keystore/eyedrops.jks -pass pass:"$PW"; then
+            echo "::error::KEYSTORE_PASSWORD does not unlock the signing key (secret is ${#PW} characters, expected 20). Re-enter it exactly."; exit 1
+          fi
 
       - name: Build
         env:
