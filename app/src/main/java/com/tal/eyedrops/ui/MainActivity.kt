@@ -79,6 +79,8 @@ sealed class Screen {
     data object Settings : Screen()
     data class Edit(val medId: String?) : Screen()
     data class History(val medId: String) : Screen()
+    /** Step-by-step screen for one reminder time (ISO date-time). */
+    data class Focus(val slot: String) : Screen()
 }
 
 object Nav {
@@ -87,6 +89,14 @@ object Nav {
     var pendingImport by mutableStateOf<PlanData?>(null)
     /** A measurement dose waiting for its value. */
     var measuring by mutableStateOf<Dose?>(null)
+    /** The caregiver PIN was entered in this session. */
+    var unlocked by mutableStateOf(false)
+    var askPin by mutableStateOf(false)
+
+    /** Opens settings, asking for the caregiver PIN when one is set. */
+    fun openSettings() {
+        if (Store.pin().isEmpty() || unlocked) screen = Screen.Settings else askPin = true
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -99,12 +109,28 @@ class MainActivity : ComponentActivity() {
         Store.init(this)
         if (Build.VERSION.SDK_INT >= 33) askNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
         handleShare(intent)
+        handleSlot(intent)
         setContent { AppTheme { Root() } }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
+        handleSlot(intent)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Nav.unlocked = false
+    }
+
+    /** Opened from a reminder: go to its step-by-step screen, over the lock screen if it came as an alarm. */
+    private fun handleSlot(i: Intent?) {
+        val slot = i?.getStringExtra(Alarms.EXTRA_OPEN_SLOT) ?: return
+        if (i.getBooleanExtra(Alarms.EXTRA_ALARM, false) && Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true); setTurnScreenOn(true)
+        }
+        Nav.screen = Screen.Focus(slot)
     }
 
     override fun onResume() {
@@ -155,11 +181,13 @@ private fun Root() {
             Screen.Settings -> SettingsScreen()
             is Screen.Edit -> MedEditor(screen.medId)
             is Screen.History -> HistoryScreen(screen.medId)
+            is Screen.Focus -> FocusScreen(screen.slot)
         }
         }
     }
     Nav.pendingImport?.let { ImportDialog(it) }
     Nav.measuring?.let { MeasureDialog(it) }
+    if (Nav.askPin) PinDialog()
 }
 
 @Composable
@@ -188,185 +216,8 @@ private fun ImportDialog(plan: PlanData) {
     )
 }
 
-// ------------------------------------------------------------ home
-
 @Composable
-private fun HomeScreen() {
-    @Suppress("UNUSED_VARIABLE") val v = Store.version.intValue
-    val ctx = LocalContext.current
-    var now by remember { mutableStateOf(LocalDateTime.now()) }
-    LaunchedEffect(Unit) { while (true) { delay(30_000); now = LocalDateTime.now() } }
-    val today = now.toLocalDate()
-    val plan = Store.plan()
-
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Toma", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
-            IconButton(onClick = { Nav.screen = Screen.Settings }) { Icon(Icons.Filled.Settings, "הגדרות", tint = Ink) }
-        }
-
-        if (plan.meds.isEmpty()) {
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text("עוד אין תוכנית תרופות", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink)
-                Text("הוסף טיפות, כדורים, זריקות או מדידות לפי ההוראות של הרופא, או קבל תוכנית שמישהו שלח לך.", color = Muted)
-                Button(onClick = { Nav.screen = Screen.Edit(null) }, modifier = Modifier.fillMaxWidth()) { Text("הוסף תרופה") }
-                OutlinedButton(onClick = { importFromClipboard(ctx) }, modifier = Modifier.fillMaxWidth()) { Text("קבל תוכנית ששלחו לי") }
-            }
-        } else {
-            DayView(now, today)
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun DayView(now: LocalDateTime, today: LocalDate) {
-    Store.version.intValue // recompose when data changes
-    var day by remember { mutableStateOf(LocalDate.now()) }
-    val plan = Store.plan()
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        NextCard(now)
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { day = day.minusDays(1) }) { Icon(Icons.Filled.KeyboardArrowRight, "יום קודם", tint = Ink) }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                val title = when (day) {
-                    today -> "היום"; today.plusDays(1) -> "מחר"; today.minusDays(1) -> "אתמול"; else -> Fmt.weekday(day)
-                }
-                Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Ink)
-                Text(Fmt.dateYear(day), color = Muted, fontSize = 13.sp)
-                if (day != today) TextButton(onClick = { day = today }) { Text("חזרה להיום") }
-            }
-            IconButton(onClick = { day = day.plusDays(1) }) { Icon(Icons.Filled.KeyboardArrowLeft, "יום הבא", tint = Ink) }
-        }
-
-        val slots = Schedule.slotsOn(day)
-        if (slots.isEmpty()) {
-            Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White).padding(20.dp),
-                contentAlignment = Alignment.Center,
-            ) { Text("אין טיפות ביום הזה", color = Muted) }
-        }
-        val nextSlot = slots.firstOrNull { it.first.isAfter(now) && !it.second.all { d -> Store.isDone(d) } }?.first
-        slots.forEach { (time, doses) -> SlotCard(time, doses, now, highlight = time == nextSlot) }
-
-        val prn = plan.meds.filter { it.prn != null }
-        if (prn.isNotEmpty()) {
-            Text("לפי הצורך", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            prn.forEach { PrnCard(it, now) }
-        }
-        if (plan.meds.count { it.type == MedType.DROPS && it.prn == null } > 1) Text(
-            "בטיפות שונות באותה שעה: 5 דקות בין טיפה לטיפה, לפי הסדר ברשימה.",
-            color = Muted, fontSize = 13.sp,
-        )
-    }
-}
-
-@Composable
-private fun NextCard(now: LocalDateTime) {
-    Store.version.intValue // recompose when data changes
-    val ctx = LocalContext.current
-    val today = now.toLocalDate()
-    val slots = Schedule.slotsOn(today)
-    val due = slots.filter { !it.first.isAfter(now) && !it.second.all { d -> Store.isDone(d) } }
-    val upcoming = Schedule.nextSlotAfter(now)
-    fun names(ds: List<Dose>) = ds.map { it.med.name }.distinct().joinToString(" · ")
-    val bg: Color; val label: String; val big: String; val what: String
-    when {
-        due.isNotEmpty() -> {
-            val s = due.last()
-            bg = Warn; label = if (due.size > 1) "ממתינות לסימון (${due.size})" else "עכשיו"
-            big = Fmt.time(s.first.toLocalTime()); what = names(s.second)
-        }
-        upcoming != null -> {
-            val mins = java.time.Duration.between(now, upcoming).toMinutes()
-            val inText = if (mins >= 60) "בעוד ${mins / 60} ש׳ ${mins % 60} ד׳" else "בעוד $mins דקות"
-            val dayText = when (upcoming.toLocalDate()) { today -> ""; today.plusDays(1) -> " · מחר"; else -> " · " + Fmt.date(upcoming.toLocalDate()) }
-            bg = Brand; label = "הטיפות הבאות · $inText$dayText"
-            big = Fmt.time(upcoming.toLocalTime()); what = names(Schedule.dosesAt(upcoming))
-        }
-        else -> { bg = Ok; label = "אין טיפות מתוכננות"; big = "✓"; what = "" }
-    }
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(bg).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(label, color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp)
-        Text(big, color = Color.White, fontSize = 42.sp, fontWeight = FontWeight.Bold)
-        if (what.isNotEmpty()) Text(what, color = Color.White, fontSize = 15.sp)
-        if (due.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = {
-                    val s = due.last()
-                    Store.setDone(s.second.filter { it.med.type != MedType.MEASURE }, true).forEach { Alarms.notifyRefill(ctx, it) }
-                    Alarms.cancelNotification(ctx, s.first); Alarms.scheduleNext(ctx)
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Warn),
-            ) { Text("סמן הכול כבוצע", fontWeight = FontWeight.Bold) }
-        }
-    }
-}
-
-@Composable
-private fun SlotCard(time: LocalDateTime, doses: List<Dose>, now: LocalDateTime, highlight: Boolean) {
-    Store.version.intValue // recompose when data changes
-    val ctx = LocalContext.current
-    val allDone = doses.all { Store.isDone(it) }
-    val missed = !allDone && !time.isAfter(now)
-    val border = when { highlight -> Brand; missed -> Warn; else -> Line }
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if (allDone) DoneBg else Color.White)
-            .border(if (highlight || missed) 2.dp else 1.dp, border, RoundedCornerShape(14.dp))
-            .padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.width(64.dp)) {
-            Text(Fmt.time(time.toLocalTime()), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (allDone) Muted else Ink)
-            if (missed) Text("לא סומן", color = Warn, fontSize = 12.sp)
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            doses.groupBy { it.med.id }.values.forEach { ds ->
-                val med = ds.first().med
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(Color(Palette[med.color])))
-                    Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(med.name, fontWeight = FontWeight.SemiBold, color = Ink, fontSize = 15.sp)
-                        val sub = listOfNotNull(
-                            med.doseText().ifEmpty { null },
-                            if (med.rotation.isNotEmpty()) Store.siteFor(ds.first()) else null,
-                            med.note.ifBlank { null },
-                        ).joinToString(" · ")
-                        if (sub.isNotEmpty()) Text(sub, color = Muted, fontSize = 13.sp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ds.sortedBy { it.site }.forEach { d ->
-                            val label = if (med.sites.size > 1 || (med.sites.size == 1 && med.rotation.isEmpty())) d.siteName else null
-                            if (med.type == MedType.MEASURE) {
-                                val v = Store.measurement(d)
-                                OutlinedButton(onClick = { Nav.measuring = d }) { Text(v ?: "רשום") }
-                            } else {
-                                CheckChip(on = Store.isDone(d), label = label) {
-                                    Store.toggle(d).forEach { Alarms.notifyRefill(ctx, it) }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PrnCard(m: Med, now: LocalDateTime) {
+fun PrnCard(m: Med, now: LocalDateTime) {
     Store.version.intValue // recompose when data changes
     val ctx = LocalContext.current
     val prn = m.prn ?: return
@@ -377,7 +228,7 @@ private fun PrnCard(m: Med, now: LocalDateTime) {
     val tooSoon = nextOk != null && nextOk.isAfter(now)
     val maxed = prn.maxPerDay > 0 && today >= prn.maxPerDay
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White)
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(CardBg)
             .border(1.dp, Line, RoundedCornerShape(14.dp)).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -405,7 +256,7 @@ private fun PrnCard(m: Med, now: LocalDateTime) {
 }
 
 @Composable
-private fun MeasureDialog(d: Dose) {
+fun MeasureDialog(d: Dose) {
     var value by remember(d.key) { mutableStateOf(Store.measurement(d) ?: "") }
     AlertDialog(
         onDismissRequest = { Nav.measuring = null },
@@ -439,7 +290,7 @@ private fun HistoryScreen(medId: String) {
             val parts = key.split("|")
             val date = runCatching { LocalDate.parse(parts[0]) }.getOrNull()
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White).padding(14.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CardBg).padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text((date?.let { Fmt.weekday(it) + " " + Fmt.dateYear(it) } ?: parts[0]) + " · " + parts.getOrElse(1) { "" },

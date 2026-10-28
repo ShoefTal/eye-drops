@@ -30,23 +30,23 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun CheckChip(on: Boolean, label: String?, onClick: () -> Unit) {
     Row(
-        Modifier.height(40.dp).widthIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
+        Modifier.height(56.dp).widthIn(min = 64.dp).clip(RoundedCornerShape(14.dp))
             .background(if (on) OkSoft else Color.Transparent)
-            .border(1.5.dp, if (on) Ok else Line, RoundedCornerShape(10.dp))
+            .border(BorderW.dp, if (on) Ok else Line, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        if (on) Icon(Icons.Filled.Check, null, tint = Ok, modifier = Modifier.size(20.dp))
+        if (on) Icon(Icons.Filled.Check, null, tint = Ok, modifier = Modifier.size(28.dp))
         val text = label ?: if (on) "" else "סמן"
-        if (text.isNotEmpty()) Text(text, color = if (on) Ok else Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        if (text.isNotEmpty()) Text(text, color = if (on) Ok else Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
 fun Section(title: String, content: @Composable () -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).padding(16.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardBg).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(title, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)

@@ -42,6 +42,8 @@ object Alarms {
     private const val TEST_NOTIF = 777
     const val EXTRA_SLOT = "slot"
     const val EXTRA_N = "n"
+    const val EXTRA_OPEN_SLOT = "openSlot"
+    const val EXTRA_ALARM = "alarm"
     private const val REQ_SLOT = 1
     private const val REQ_FOLLOW = 2
     private const val CH_QUIET = "drops_quiet"
@@ -99,6 +101,18 @@ object Alarms {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
+    /** Opens the step-by-step screen of [slot]; [alarm] = shown over the lock screen. */
+    private fun openSlot(c: Context, slot: LocalDateTime, alarm: Boolean): PendingIntent = PendingIntent.getActivity(
+        c, notifId(slot) * 31 + (if (alarm) 7 else 5),
+        Intent(c, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(EXTRA_OPEN_SLOT, slot.toString()).putExtra(EXTRA_ALARM, alarm),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    fun canFullScreen(c: Context): Boolean =
+        Build.VERSION.SDK_INT < 34 || c.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+
     fun canExact(c: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am(c).canScheduleExactAlarms()
 
@@ -150,10 +164,11 @@ object Alarms {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(openApp(c, notifId(slot)))
+            .setContentIntent(openSlot(c, slot, false))
             .setAutoCancel(true)
             .addAction(0, "בוצע ✓", broadcast(c, ACTION_DONE, notifId(slot) * 31 + 1, slot))
             .addAction(0, "עוד 10 דקות", broadcast(c, ACTION_SNOOZE, notifId(slot) * 31 + 2, slot, repeat))
+            .apply { if (Store.fullScreen()) setFullScreenIntent(openSlot(c, slot, true), true) }
             .build()
         NotificationManagerCompat.from(c).notify(notifId(slot), n)
     }

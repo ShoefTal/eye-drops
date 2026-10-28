@@ -2,7 +2,9 @@ package com.tal.eyedrops.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDateTime
@@ -13,10 +15,31 @@ object Store {
     val version = mutableIntStateOf(0)
     private var cached: PlanData? = null
 
+    /** Display options, kept as Compose state so the whole UI follows a change at once. */
+    val highContrast = mutableStateOf(false)
+    val textScale = mutableFloatStateOf(1f)
+
     fun init(c: Context) {
         if (::prefs.isInitialized) return
         prefs = c.applicationContext.getSharedPreferences("toma", Context.MODE_PRIVATE)
+        highContrast.value = prefs.getBoolean("hc", false)
+        textScale.floatValue = prefs.getFloat("textScale", 1.15f)
     }
+
+    fun setHighContrast(on: Boolean) { highContrast.value = on; prefs.edit().putBoolean("hc", on).apply(); bump() }
+    fun setTextScale(f: Float) { textScale.floatValue = f; prefs.edit().putFloat("textScale", f).apply(); bump() }
+
+    /** Caregiver lock: settings and plan editing need this PIN. Empty = no lock. */
+    fun pin(): String = prefs.getString("pin", "") ?: ""
+    fun setPin(p: String) { prefs.edit().putString("pin", p).apply(); bump() }
+
+    /** Read the dose aloud on the step-by-step screen. */
+    fun voice(): Boolean = prefs.getBoolean("voice", true)
+    fun setVoice(on: Boolean) { prefs.edit().putBoolean("voice", on).apply(); bump() }
+
+    /** Show reminders as a full-screen alarm, also on the lock screen. */
+    fun fullScreen(): Boolean = prefs.getBoolean("fullScreen", true)
+    fun setFullScreen(on: Boolean) { prefs.edit().putBoolean("fullScreen", on).apply(); bump() }
 
     private fun bump() { version.intValue++ }
     fun refresh() = bump()

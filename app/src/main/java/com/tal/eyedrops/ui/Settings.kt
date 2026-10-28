@@ -115,6 +115,8 @@ fun SettingsScreen() {
             }
         }
 
+        Section("תצוגה ונגישות") { DisplayRows(ctx) }
+
         Section("התראה") {
             Segmented(listOf("קולית", "שקטה (רטט)"), if (Store.soundOn()) 0 else 1) { Store.setSound(it == 0) }
             if (Store.soundOn()) ToneRow(ctx)
@@ -137,6 +139,65 @@ fun SettingsScreen() {
 
 private fun appVersion(ctx: Context): String =
     runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
+
+@Composable
+private fun DisplayRows(ctx: Context) {
+    Store.version.intValue
+    var pinDialog by remember { mutableStateOf(false) }
+    Text("גודל טקסט", color = Ink, fontWeight = FontWeight.SemiBold)
+    val scales = listOf(1.0f, 1.15f, 1.3f, 1.45f)
+    val idx = scales.indexOfFirst { kotlin.math.abs(it - Store.textScale.floatValue) < 0.01f }.coerceAtLeast(0)
+    Segmented(listOf("רגיל", "גדול", "גדול מאוד", "ענק"), idx) { Store.setTextScale(scales[it]) }
+    SwitchRow("ניגודיות גבוהה", "שחור על לבן, מסגרות עבות", Store.highContrast.value) { Store.setHighContrast(it) }
+    SwitchRow("הקראה קולית", "במסך שלב אחר שלב, קורא בקול מה לקחת", Store.voice()) { Store.setVoice(it) }
+    SwitchRow("התראה על כל המסך", "כמו שעון מעורר, גם כשהטלפון נעול", Store.fullScreen()) { Store.setFullScreen(it) }
+    if (Store.fullScreen() && !Alarms.canFullScreen(ctx) && Build.VERSION.SDK_INT >= 34) {
+        Button(onClick = {
+            runCatching { ctx.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + ctx.packageName))) }
+        }) { Text("אפשר התראה על כל המסך") }
+    }
+    Text("נעילת מטפל", color = Ink, fontWeight = FontWeight.SemiBold)
+    if (Store.pin().isEmpty()) {
+        Text("קוד שנדרש כדי להיכנס להגדרות ולשנות את התוכנית, כדי שלא ישנו משהו בטעות.", color = Muted, fontSize = 13.sp)
+        OutlinedButton(onClick = { pinDialog = true }) { Text("הגדר קוד") }
+    } else {
+        Text("ההגדרות נעולות בקוד.", color = Muted, fontSize = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { Nav.unlocked = false; Nav.screen = Screen.Home }) { Text("נעל עכשיו") }
+            TextButton(onClick = { Store.setPin("") }) { Text("בטל קוד") }
+        }
+    }
+    if (pinDialog) {
+        var a by remember { mutableStateOf("") }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pinDialog = false },
+            title = { Text("קוד מטפל חדש") },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = a, onValueChange = { a = it.filter(Char::isDigit).take(8) }, singleLine = true,
+                    label = { Text("4 ספרות לפחות") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
+                )
+            },
+            confirmButton = {
+                Button(enabled = a.length >= 4, onClick = { Store.setPin(a); Nav.unlocked = true; pinDialog = false }) { Text("שמור") }
+            },
+            dismissButton = { TextButton(onClick = { pinDialog = false }) { Text("ביטול") } },
+        )
+    }
+}
+
+@Composable
+private fun SwitchRow(title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Ink, fontWeight = FontWeight.SemiBold)
+            Text(sub, color = Muted, fontSize = 13.sp)
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
 
 @Composable
 private fun UpdateRow(ctx: Context) {
