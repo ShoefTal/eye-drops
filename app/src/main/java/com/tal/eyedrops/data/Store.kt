@@ -19,6 +19,7 @@ object Store {
     }
 
     private fun bump() { version.intValue++ }
+    fun refresh() = bump()
 
     // ---- plan ----
     fun plan(): PlanData {

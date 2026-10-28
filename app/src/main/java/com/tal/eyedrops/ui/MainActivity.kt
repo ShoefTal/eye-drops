@@ -15,6 +15,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -107,6 +110,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Alarms.scheduleNext(this)
+        Store.refresh() // permissions may have changed in system settings
         Updater.checkAsync(this, interactive = false)
     }
 
@@ -145,11 +149,13 @@ private fun Root() {
         Nav.screen = if (screen is Screen.Edit || screen is Screen.History) Screen.Settings else Screen.Home
     }
     Surface(Modifier.fillMaxSize(), color = Bg) {
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
         when (screen) {
             Screen.Home -> HomeScreen()
             Screen.Settings -> SettingsScreen()
             is Screen.Edit -> MedEditor(screen.medId)
             is Screen.History -> HistoryScreen(screen.medId)
+        }
         }
     }
     Nav.pendingImport?.let { ImportDialog(it) }
@@ -221,6 +227,7 @@ private fun HomeScreen() {
 
 @Composable
 private fun DayView(now: LocalDateTime, today: LocalDate) {
+    Store.version.intValue // recompose when data changes
     var day by remember { mutableStateOf(LocalDate.now()) }
     val plan = Store.plan()
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -263,6 +270,7 @@ private fun DayView(now: LocalDateTime, today: LocalDate) {
 
 @Composable
 private fun NextCard(now: LocalDateTime) {
+    Store.version.intValue // recompose when data changes
     val ctx = LocalContext.current
     val today = now.toLocalDate()
     val slots = Schedule.slotsOn(today)
@@ -308,6 +316,7 @@ private fun NextCard(now: LocalDateTime) {
 
 @Composable
 private fun SlotCard(time: LocalDateTime, doses: List<Dose>, now: LocalDateTime, highlight: Boolean) {
+    Store.version.intValue // recompose when data changes
     val ctx = LocalContext.current
     val allDone = doses.all { Store.isDone(it) }
     val missed = !allDone && !time.isAfter(now)
@@ -358,6 +367,7 @@ private fun SlotCard(time: LocalDateTime, doses: List<Dose>, now: LocalDateTime,
 
 @Composable
 private fun PrnCard(m: Med, now: LocalDateTime) {
+    Store.version.intValue // recompose when data changes
     val ctx = LocalContext.current
     val prn = m.prn ?: return
     val log = Store.prnLog(m.id)

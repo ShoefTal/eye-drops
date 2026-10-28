@@ -140,6 +140,7 @@ private fun appVersion(ctx: Context): String =
 
 @Composable
 private fun UpdateRow(ctx: Context) {
+    Store.version.intValue // recompose when data changes
     var checking by remember { mutableStateOf(false) }
     Text("גרסה ${appVersion(ctx)}", color = Ink, fontWeight = FontWeight.SemiBold)
     if (!Updater.enabled()) {
@@ -195,6 +196,7 @@ private fun ToneRow(ctx: Context) {
 
 @Composable
 private fun TestRow(ctx: Context) {
+    Store.version.intValue // recompose when data changes
     val testAt = Store.testAt()?.takeIf { it.isAfter(LocalDateTime.now()) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("בדיקה", color = Ink, fontWeight = FontWeight.SemiBold)
@@ -228,6 +230,7 @@ private fun TestRow(ctx: Context) {
 
 @Composable
 private fun ReliabilityRow(ctx: Context) {
+    Store.version.intValue // recompose when data changes
     val pm = ctx.getSystemService(PowerManager::class.java)
     if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
