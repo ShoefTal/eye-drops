@@ -125,8 +125,8 @@ fun sharePlan(c: Context) {
     val p = Store.plan()
     if (p.meds.isEmpty()) { Toast.makeText(c, "אין עדיין תרופות בתוכנית", Toast.LENGTH_SHORT).show(); return }
     val text = "תוכנית טיפות (${p.meds.joinToString(", ") { it.name }})\n" +
-        "לקבלה: לחיצה ארוכה על ההודעה > שיתוף > טיפות.\n" +
-        "או: העתק את ההודעה, ובאפליקציה טיפות > הגדרות > קבל תוכנית.\n\n" + p.shareCode()
+        "לקבלה: לחיצה ארוכה על ההודעה > שיתוף > DropTime.\n" +
+        "או: העתק את ההודעה, ובאפליקציה DropTime > הגדרות > קבל תוכנית.\n\n" + p.shareCode()
     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
     c.startActivity(Intent.createChooser(send, "שלח תוכנית"))
 }
@@ -189,7 +189,7 @@ private fun HomeScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("טיפות", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
+            Text("DropTime", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
             IconButton(onClick = { Nav.screen = Screen.Settings }) { Icon(Icons.Filled.Settings, "הגדרות", tint = Ink) }
         }
 

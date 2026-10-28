@@ -99,7 +99,7 @@ object Updater {
             return "יש גרסה חדשה ($name). צריך קודם לאשר עדכונים בהגדרות."
         }
         val apk = File(c.cacheDir, "update.apk")
-        get("$base/${info.optString("apk", "EyeDrops.apk")}").inputStream.use { inp -> apk.outputStream().use { inp.copyTo(it) } }
+        get("$base/${info.optString("apk", "DropTime.apk")}").inputStream.use { inp -> apk.outputStream().use { inp.copyTo(it) } }
         val expected = info.optString("sha256", "")
         val actual = MessageDigest.getInstance("SHA-256").digest(apk.readBytes()).joinToString("") { String.format(java.util.Locale.US, "%02x", it) }
         if (expected.isNotEmpty() && !expected.equals(actual, ignoreCase = true)) {
