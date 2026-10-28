@@ -2,7 +2,12 @@ package com.tal.eyedrops.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
+import android.media.RingtoneManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -301,7 +306,8 @@ private fun SettingsScreen(onBack: () -> Unit) {
                 }
                 Switch(checked = Store.followUp(), onCheckedChange = { Store.setFollowUp(it) })
             }
-            OutlinedButton(onClick = { testNotification(ctx) }) { Text("שלח התראת בדיקה") }
+            if (Store.soundOn()) ToneRow(ctx)
+            TestRow(ctx)
             ReliabilityRow(ctx)
         }
 
@@ -350,10 +356,69 @@ private fun ReliabilityRow(ctx: Context) {
     }
 }
 
-private fun testNotification(ctx: Context) {
-    val eyes = Store.eyes()
-    val slot = Plan.nextSlotAfter(LocalDateTime.now(), eyes) ?: return
-    Alarms.notifySlot(ctx, slot, 0)
+@Composable
+private fun ToneRow(ctx: Context) {
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            @Suppress("DEPRECATION")
+            val uri = res.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            Store.setTone(uri?.toString())
+            Alarms.createChannels(ctx)
+        }
+    }
+    val tone = Alarms.currentTone()
+    val name = remember(Store.version.intValue) {
+        runCatching { tone?.let { RingtoneManager.getRingtone(ctx, it)?.getTitle(ctx) } }.getOrNull() ?: "ברירת מחדל"
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("צלצול", color = Ink, fontWeight = FontWeight.SemiBold)
+            Text(name, color = Muted, fontSize = 13.sp)
+        }
+        OutlinedButton(onClick = {
+            val i = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "צלצול לטיפות")
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, Alarms.defaultTone())
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, tone)
+            runCatching { picker.launch(i) }
+        }) { Text("בחר צלצול") }
+    }
+}
+
+@Composable
+private fun TestRow(ctx: Context) {
+    val testAt = Store.testAt()?.takeIf { it.isAfter(LocalDateTime.now()) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("בדיקה", color = Ink, fontWeight = FontWeight.SemiBold)
+        if (testAt != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "בדיקה מתוזמנת ל־${Fmt.weekday(testAt.toLocalDate())} ${Fmt.date(testAt.toLocalDate())} ב־${Fmt.time(testAt.toLocalTime())}",
+                    color = Brand, fontSize = 14.sp, modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { Alarms.cancelTest(ctx) }) { Text("בטל") }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { Alarms.scheduleTest(ctx, LocalDateTime.now().plusMinutes(1).withSecond(0).withNano(0)) }) {
+                Text("בעוד דקה")
+            }
+            OutlinedButton(onClick = {
+                val now = LocalDateTime.now()
+                DatePickerDialog(ctx, { _, y, m, d ->
+                    TimePickerDialog(ctx, { _, h, min ->
+                        val at = LocalDateTime.of(y, m + 1, d, h, min)
+                        if (at.isAfter(LocalDateTime.now())) Alarms.scheduleTest(ctx, at)
+                        else Toast.makeText(ctx, "בחר זמן עתידי", Toast.LENGTH_SHORT).show()
+                    }, now.hour, now.minute, true).show()
+                }, now.year, now.monthValue - 1, now.dayOfMonth).show()
+            }) { Text("בחר תאריך ושעה") }
+        }
+        Text("הבדיקה מצלצלת בדיוק כמו התראה אמיתית, גם כשהמסך כבוי.", color = Muted, fontSize = 12.sp)
+    }
 }
 
 @Composable

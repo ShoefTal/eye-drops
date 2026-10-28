@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -33,25 +34,37 @@ object Alarms {
     const val ACTION_FOLLOW = "com.tal.eyedrops.FOLLOW"
     const val ACTION_DONE = "com.tal.eyedrops.DONE"
     const val ACTION_SNOOZE = "com.tal.eyedrops.SNOOZE"
+    const val ACTION_TEST = "com.tal.eyedrops.TEST"
+    private const val REQ_TEST = 3
+    private const val TEST_NOTIF = 777
     const val EXTRA_SLOT = "slot"
     const val EXTRA_N = "n"
     private const val REQ_SLOT = 1
     private const val REQ_FOLLOW = 2
-    private const val CH_SOUND = "drops_sound"
     private const val CH_QUIET = "drops_quiet"
     private const val MAX_FOLLOW = 2
 
+    private fun soundChannel() = "drops_sound_v${Store.toneVersion()}"
+
+    fun defaultTone(): Uri? = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+    fun currentTone(): Uri? = Store.toneUri()?.let { Uri.parse(it) } ?: defaultTone()
+
     fun createChannels(c: Context) {
+        Store.init(c)
         val nm = c.getSystemService(NotificationManager::class.java)
-        val alarmTone = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        // Drop sound channels from earlier tone choices.
+        nm.notificationChannels.filter { it.id.startsWith("drops_sound") && it.id != soundChannel() }
+            .forEach { nm.deleteNotificationChannel(it.id) }
+        val alarmTone = currentTone()
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
         val vib = longArrayOf(0, 400, 200, 400, 200, 400)
         nm.createNotificationChannel(
-            NotificationChannel(CH_SOUND, "טיפות – התראה קולית", NotificationManager.IMPORTANCE_HIGH).apply {
+            NotificationChannel(soundChannel(), "טיפות – התראה קולית", NotificationManager.IMPORTANCE_HIGH).apply {
                 setSound(alarmTone, attrs)
                 enableVibration(true)
                 vibrationPattern = vib
@@ -129,7 +142,7 @@ object Alarms {
         }
         val body = lines.joinToString("\n") + if (byDrug.size > 1) "\n5 דקות בין טיפה לטיפה" else ""
         val title = "טיפות ${Fmt.time(slot.toLocalTime())}" + if (repeat > 0) " · תזכורת" else ""
-        val n = NotificationCompat.Builder(c, if (Store.soundOn()) CH_SOUND else CH_QUIET)
+        val n = NotificationCompat.Builder(c, if (Store.soundOn()) soundChannel() else CH_QUIET)
             .setSmallIcon(R.drawable.ic_drop)
             .setContentTitle(title)
             .setContentText(byDrug.joinToString(" · ") { it.first.label })
@@ -143,6 +156,37 @@ object Alarms {
             .addAction(0, "עוד 10 דקות", broadcast(c, ACTION_SNOOZE, notifId(slot) * 31 + 2, slot, repeat))
             .build()
         NotificationManagerCompat.from(c).notify(notifId(slot), n)
+    }
+
+    // ---- test alarm ----
+    fun scheduleTest(c: Context, at: LocalDateTime) {
+        Store.setTestAt(at)
+        set(c, at, broadcast(c, ACTION_TEST, REQ_TEST, at))
+    }
+
+    fun cancelTest(c: Context) {
+        Store.setTestAt(null)
+        am(c).cancel(broadcast(c, ACTION_TEST, REQ_TEST, LocalDateTime.now()))
+    }
+
+    fun notifyTest(c: Context) {
+        Store.init(c)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(c, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val n = NotificationCompat.Builder(c, if (Store.soundOn()) soundChannel() else CH_QUIET)
+            .setSmallIcon(R.drawable.ic_drop)
+            .setContentTitle("בדיקה: טיפות ${Fmt.time(LocalDateTime.now().toLocalTime())}")
+            .setContentText("כך תיראה ותישמע התראה של טיפות")
+            .setStyle(NotificationCompat.BigTextStyle().bigText("1. Sterodex\n2. Vigamox\n3. Bromsite / Nevanac\n4. Bephanten\nזו התראת בדיקה בלבד."))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(openApp(c, TEST_NOTIF))
+            .setAutoCancel(true)
+            .addAction(0, "בוצע ✓", broadcast(c, ACTION_DONE, TEST_NOTIF, LocalDateTime.of(2000, 1, 1, 0, 0)))
+            .build()
+        NotificationManagerCompat.from(c).notify(TEST_NOTIF, n)
     }
 
     fun followUpsAllowed() = Store.followUp()
@@ -169,8 +213,13 @@ class AlarmReceiver : BroadcastReceiver() {
                     if (Alarms.followUpsAllowed() && n < Alarms.MAX) Alarms.scheduleFollow(c, slot, n + 1, Alarms.FOLLOW_MINUTES)
                 }
             }
+            Alarms.ACTION_TEST -> {
+                Store.setTestAt(null)
+                Alarms.notifyTest(c)
+            }
             Alarms.ACTION_DONE -> {
                 slot ?: return
+                if (slot.year == 2000) { NotificationManagerCompat.from(c).cancel(777); return }
                 Store.setDone(Plan.dosesAt(slot, Store.eyes()), true)
                 Alarms.cancelNotification(c, slot)
             }

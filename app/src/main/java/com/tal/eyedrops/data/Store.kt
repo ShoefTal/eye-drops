@@ -44,6 +44,18 @@ object Store {
     fun followUp(): Boolean = prefs.getBoolean("followUp", true)
     fun setFollowUp(on: Boolean) { prefs.edit().putBoolean("followUp", on).apply(); bump() }
 
+    /** Custom tone picked by the user (null = phone's default alarm tone). */
+    fun toneUri(): String? = prefs.getString("tone", null)
+    /** Bumped on every tone change: a new channel id is needed because Android locks a channel's sound. */
+    fun toneVersion(): Int = prefs.getInt("toneVersion", 1)
+    fun setTone(uri: String?) {
+        prefs.edit().putString("tone", uri).putInt("toneVersion", toneVersion() + 1).apply(); bump()
+    }
+
+    /** A one-off test alarm the user scheduled, or null. */
+    fun testAt(): LocalDateTime? = prefs.getString("testAt", null)?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+    fun setTestAt(t: LocalDateTime?) { prefs.edit().putString("testAt", t?.toString()).apply(); bump() }
+
     // ---- done marks ----
     private fun doneSet(): Set<String> = prefs.getStringSet("done", emptySet()) ?: emptySet()
 
