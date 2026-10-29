@@ -36,6 +36,21 @@ jobs:
             echo "::error::KEYSTORE_PASSWORD does not unlock the signing key (secret is ${#PW} characters, expected 20). Re-enter it exactly."; exit 1
           fi
 
+      # Heebo (SIL Open Font License) from Google Fonts, cut to static weights.
+      # If it cannot be fetched the app falls back to the phone's font.
+      - name: Fetch Heebo font
+        run: |
+          mkdir -p app/src/main/assets/fonts
+          if curl -fsSL -o heebo.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/heebo/Heebo%5Bwght%5D.ttf"; then
+            python3 -m venv /tmp/ft && /tmp/ft/bin/pip install -q fonttools
+            for w in 400 500 700 800; do
+              /tmp/ft/bin/fonttools varLib.instancer heebo.ttf wght=$w -o app/src/main/assets/fonts/heebo_$w.ttf || echo "::warning::Heebo $w failed"
+            done
+            ls -la app/src/main/assets/fonts
+          else
+            echo "::warning::Heebo font not downloaded; the app will use the phone's font"
+          fi
+
       - name: Build
         env:
           UPDATE_BASE: https://github.com/${{ github.repository }}/releases/latest/download

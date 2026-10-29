@@ -145,7 +145,8 @@ data class Dose(val med: Med, val site: Int, val time: LocalDateTime) {
     val siteName: String? get() = med.sites.getOrNull(site)
 }
 
-val Palette = listOf(0xFFC2416A, 0xFFB7791F, 0xFF4C5FB0, 0xFF1F8A7D, 0xFF7B4FB5, 0xFF2E7D4F, 0xFFD0602A, 0xFF5D6B75)
+// Medication colors; none close to the amber used for "now".
+val Palette = listOf(0xFFC2416A, 0xFF2F7FC1, 0xFF7B4FB5, 0xFF1F8A7D, 0xFF8C4A2F, 0xFF2E7D4F, 0xFF4C5FB0, 0xFF5D6B75)
 
 /** Turns the current plan into dated doses. "As needed" meds are not scheduled. */
 object Schedule {

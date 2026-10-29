@@ -95,14 +95,24 @@ fun HomeScreen() {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                Modifier.size(46.dp).clip(RoundedCornerShape(13.dp)).background(Brand),
+                contentAlignment = Alignment.Center,
+            ) {
+                androidx.compose.foundation.Image(
+                    androidx.compose.ui.res.painterResource(com.tal.eyedrops.R.drawable.ic_launcher_fg), null,
+                    modifier = Modifier.size(46.dp),
+                )
+            }
             Column(Modifier.weight(1f)) {
-                Text("היום, ${Fmt.weekday(today).removePrefix("יום ")}", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
-                Text(Fmt.dateYear(today), fontSize = 19.sp, color = Muted)
+                val greet = when (now.hour) { in 5..11 -> "בוקר טוב"; in 12..16 -> "צהריים טובים"; in 17..20 -> "ערב טוב"; else -> "לילה טוב" }
+                Text(greet, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = Ink)
+                Text("${Fmt.weekday(today)}, ${Fmt.dateYear(today)}", fontSize = 18.sp, color = Muted)
             }
             Box(
-                Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).background(CardBg)
-                    .border(BorderW.dp, Line, RoundedCornerShape(16.dp)),
+                Modifier.size(56.dp).clip(androidx.compose.foundation.shape.CircleShape).background(CardBg)
+                    .border(if (Store.highContrast.value) 3.dp else 1.dp, Line, androidx.compose.foundation.shape.CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 IconButton(onClick = { Nav.openSettings() }, modifier = Modifier.size(56.dp)) {
@@ -141,7 +151,7 @@ fun BigButton(label: String, color: Color = Brand, check: Boolean = false, enabl
     Button(
         onClick = onClick, enabled = enabled,
         modifier = Modifier.fillMaxWidth().height(88.dp),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(44.dp),
         colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = Color.White),
     ) {
         if (check) { Icon(Icons.Filled.Check, null, modifier = Modifier.size(36.dp)); Spacer(Modifier.width(10.dp)) }
@@ -151,7 +161,11 @@ fun BigButton(label: String, color: Color = Brand, check: Boolean = false, enabl
 
 @Composable
 private fun SecondButton(label: String, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().height(60.dp), shape = RoundedCornerShape(16.dp)) {
+    Button(
+        onClick = onClick, modifier = Modifier.fillMaxWidth().height(60.dp), shape = RoundedCornerShape(30.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = SoftFill, contentColor = Ink),
+        border = if (Store.highContrast.value) androidx.compose.foundation.BorderStroke(3.dp, Line) else null,
+    ) {
         Text(label, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink)
     }
 }
@@ -167,15 +181,21 @@ private fun NowCard(now: LocalDateTime) {
     val upcoming = if (current == null) Schedule.nextSlotAfter(now) else null
 
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(if (current != null) NowBg else CardBg)
-            .border(if (current != null) 3.dp else BorderW.dp, if (current != null) Brand else Line, RoundedCornerShape(28.dp))
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(if (current != null) NowBg else CardBg)
+            .border(if (current != null) 3.dp else BorderW.dp, if (current != null) Amber else Line, RoundedCornerShape(30.dp))
             .padding(22.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         when {
             current != null -> {
                 val (slot, doses) = current
-                Text("עכשיו", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Brand)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("עכשיו", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Ink,
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Amber).padding(horizontal = 14.dp, vertical = 2.dp))
+                    Spacer(Modifier.weight(1f))
+                    val n = doses.map { it.med.id }.distinct().size
+                    if (n > 1) Text("$n תרופות", fontSize = 18.sp, color = Muted)
+                }
                 Text(Fmt.time(slot.toLocalTime()), fontSize = 64.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = 66.sp)
                 doses.groupBy { it.med.id }.values.forEach { ds -> MedLine(ds, nameSize = 30) }
                 val pending = doses.filter { !Store.isDone(it) }
