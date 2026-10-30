@@ -86,6 +86,9 @@ private fun markSlot(ctx: Context, slot: LocalDateTime, doses: List<Dose>) {
 fun HomeScreen() {
     Store.version.intValue // recompose when data changes
     val ctx = LocalContext.current
+    val pickPlan = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { importFromFile(ctx, it) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
     LaunchedEffect(Unit) { while (true) { delay(20_000); now = LocalDateTime.now() } }
     val today = now.toLocalDate()
@@ -130,7 +133,10 @@ fun HomeScreen() {
                 Text("הוסף טיפות, כדורים, זריקות או מדידות, או קבל תוכנית שמישהו שלח לך.", fontSize = 18.sp, color = Muted)
                 BigButton("הוסף תרופה") { Nav.screen = Screen.Edit(null) }
                 OutlinedButton(onClick = { importFromClipboard(ctx) }, modifier = Modifier.fillMaxWidth().height(60.dp)) {
-                    Text("קבל תוכנית ששלחו לי", fontSize = 20.sp)
+                    Text("הדבק תוכנית שהעתקתי", fontSize = 20.sp)
+                }
+                OutlinedButton(onClick = { pickPlan.launch(arrayOf("text/*", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth().height(60.dp)) {
+                    Text("טען תוכנית מקובץ", fontSize = 20.sp)
                 }
             }
         } else {

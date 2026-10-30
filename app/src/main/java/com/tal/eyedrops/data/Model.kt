@@ -104,7 +104,10 @@ data class PlanData(val meds: List<Med>) {
 
         /** Finds a shared plan code anywhere in a text (e.g. a forwarded WhatsApp message). */
         fun fromShareText(text: String): PlanData? {
-            val m = Regex("TOMA1:([A-Za-z0-9_\\-]+=*)").find(text) ?: return null
+            // Some apps wrap long lines: drop any whitespace that follows the prefix.
+            val start = text.indexOf("TOMA1:"); if (start < 0) return null
+            val tail = text.substring(start).replace(Regex("\\s"), "")
+            val m = Regex("TOMA1:([A-Za-z0-9_\\-]+=*)").find(tail) ?: return null
             return runCatching {
                 fromJson(String(Base64.decode(m.groupValues[1], Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
             }.getOrNull()

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -140,13 +141,41 @@ class MainActivity : ComponentActivity() {
         Updater.checkAsync(this, interactive = false)
     }
 
+    /** A plan shared as text, as a .txt file, or opened from a file manager. */
     private fun handleShare(i: Intent?) {
-        if (i?.action != Intent.ACTION_SEND) return
-        val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        val plan = PlanData.fromShareText(text)
-        if (plan == null) Toast.makeText(this, "לא נמצאה תוכנית בהודעה", Toast.LENGTH_LONG).show()
+        if (i == null) return
+        val text: String? = when (i.action) {
+            Intent.ACTION_SEND ->
+                i.getStringExtra(Intent.EXTRA_TEXT)
+                    ?: streamUri(i)?.let { readText(this, it) }
+            Intent.ACTION_VIEW -> i.data?.let { readText(this, it) }
+            else -> return
+        }
+        val plan = text?.let { PlanData.fromShareText(it) }
+        if (plan == null) Toast.makeText(this, "לא נמצאה תוכנית. שלח את ההודעה כטקסט, או בחר את הקובץ מההגדרות.", Toast.LENGTH_LONG).show()
         else { Nav.pendingImport = plan; Nav.screen = Screen.Home }
     }
+
+    @Suppress("DEPRECATION")
+    private fun streamUri(i: Intent): Uri? =
+        if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        else i.getParcelableExtra(Intent.EXTRA_STREAM)
+}
+
+/** Reads a small text file the user picked or shared (max 200 KB). */
+fun readText(c: Context, uri: Uri): String? = runCatching {
+    c.contentResolver.openInputStream(uri)?.use { s ->
+        val buf = s.readBytes().let { if (it.size > 200_000) it.copyOf(200_000) else it }
+        String(buf, Charsets.UTF_8)
+    }
+}.getOrNull()
+
+/** Called with the file the user picked in the "choose file" dialog. */
+fun importFromFile(c: Context, uri: Uri?) {
+    uri ?: return
+    val plan = readText(c, uri)?.let { PlanData.fromShareText(it) }
+    if (plan == null) Toast.makeText(c, "בקובץ הזה אין תוכנית של Toma", Toast.LENGTH_LONG).show()
+    else Nav.pendingImport = plan
 }
 
 /** Reads a shared plan from the clipboard (the user copied the WhatsApp message). */

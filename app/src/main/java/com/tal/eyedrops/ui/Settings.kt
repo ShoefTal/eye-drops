@@ -65,6 +65,9 @@ import java.time.LocalDateTime
 fun SettingsScreen() {
     @Suppress("UNUSED_VARIABLE") val v = Store.version.intValue
     val ctx = LocalContext.current
+    val pickPlan = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { importFromFile(ctx, it) }
     val plan = Store.plan()
 
     Column(
@@ -109,9 +112,13 @@ fun SettingsScreen() {
             }
             if (plan.meds.size > 1) Text("הסדר ברשימה הוא הסדר באותה שעה.", color = Muted, fontSize = 12.sp)
             Button(onClick = { Nav.screen = Screen.Edit(null) }) { Text("הוסף תרופה או מדידה") }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedButton(onClick = { sharePlan(ctx) }) { Text("שלח תוכנית") }
-                OutlinedButton(onClick = { importFromClipboard(ctx) }) { Text("קבל תוכנית") }
+                OutlinedButton(onClick = { importFromClipboard(ctx) }) { Text("הדבק תוכנית") }
+                OutlinedButton(onClick = { pickPlan.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("מקובץ") }
             }
         }
 
