@@ -65,6 +65,7 @@ import java.time.LocalDateTime
 fun SettingsScreen() {
     @Suppress("UNUSED_VARIABLE") val v = Store.version.intValue
     val ctx = LocalContext.current
+    var confirmClear by remember { mutableStateOf(false) }
     val pickPlan = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { importFromFile(ctx, it) }
@@ -120,6 +121,34 @@ fun SettingsScreen() {
                 OutlinedButton(onClick = { importFromClipboard(ctx) }) { Text("הדבק תוכנית") }
                 OutlinedButton(onClick = { pickPlan.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("מקובץ") }
             }
+            if (plan.meds.isNotEmpty()) {
+                androidx.compose.material3.TextButton(
+                    onClick = { confirmClear = true },
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = Warn),
+                ) { Text("מחק את כל התוכנית") }
+            }
+        }
+        if (confirmClear) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmClear = false },
+                title = { Text("למחוק את כל התוכנית?") },
+                text = {
+                    Text("יימחקו ${plan.meds.size} התרופות, כל הסימונים, המלאי והמדידות. התזכורות יפסיקו. " +
+                        "ההגדרות (צלצול, גודל טקסט, קוד מטפל) נשארות. אי אפשר לבטל את זה.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            androidx.core.app.NotificationManagerCompat.from(ctx).cancelAll()
+                            Store.clearPlan(); Alarms.scheduleNext(ctx); confirmClear = false
+                            android.widget.Toast.makeText(ctx, "התוכנית נמחקה", android.widget.Toast.LENGTH_SHORT).show()
+                            Nav.screen = Screen.Home
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Warn),
+                    ) { Text("מחק הכול") }
+                },
+                dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmClear = false }) { Text("ביטול") } },
+            )
         }
 
         Section("תצוגה ונגישות") { DisplayRows(ctx) }

@@ -68,6 +68,15 @@ object Store {
 
     fun deleteMed(id: String) { val p = plan(); savePlan(p.copy(meds = p.meds.filter { it.id != id })) }
 
+    /** Removes the whole plan with its marks, rotation, stock, measurements and as-needed log. Display and alert settings stay. */
+    fun clearPlan() {
+        val e = prefs.edit()
+        plan().meds.forEach { m -> e.remove("rot_${m.id}").remove("stock_${m.id}").remove("prn_${m.id}") }
+        e.remove("done").remove("rotUsed").remove("meas").remove("testAt")
+        e.apply()
+        savePlan(PlanData.EMPTY)
+    }
+
     fun moveMed(id: String, delta: Int) {
         val p = plan(); val list = p.meds.toMutableList()
         val i = list.indexOfFirst { it.id == id }; val j = i + delta
