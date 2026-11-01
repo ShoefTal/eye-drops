@@ -20,8 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -58,11 +56,25 @@ import com.tal.eyedrops.data.Schedule
 import com.tal.eyedrops.data.Store
 import com.tal.eyedrops.reminders.Alarms
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.time.Duration
 import java.time.LocalDateTime
 import java.util.Locale
-
-private fun hasSeveral(ds: List<Dose>) = ds.size > 1
 
 /** What is due for one med at one time, in words: "טיפה אחת · עין ימין · עם אוכל". */
 private fun subLine(ds: List<Dose>): String {
@@ -80,7 +92,62 @@ private fun markSlot(ctx: Context, slot: LocalDateTime, doses: List<Dose>) {
     Alarms.scheduleNext(ctx)
 }
 
-// ------------------------------------------------------------ home (option A)
+// ------------------------------------------------------------ home: the wheel
+
+/** One row of the wheel: a day label, or one reminder time with its doses. */
+private sealed class Entry {
+    data class Day(val date: LocalDate) : Entry()
+    data class Slot(val time: LocalDateTime, val doses: List<Dose>, val state: SlotState) : Entry()
+    data object Prn : Entry()
+}
+private enum class SlotState { DONE, SKIPPED, NEXT, LATER }
+
+private fun slotFull(doses: List<Dose>) = doses.isNotEmpty() && doses.all { Store.isDone(it) }
+
+/**
+ * Yesterday to the day after tomorrow. The "next" time is the earliest one not taken
+ * (and not skipped) since the plan was loaded; it stays next until it is marked.
+ */
+private fun buildRows(now: LocalDateTime): Pair<List<Entry>, Int> {
+    val since = Store.since()
+    val today = now.toLocalDate()
+    val slots = ArrayList<Entry.Slot>()
+    var next: LocalDateTime? = null
+    for (d in -1..2) {
+        val date = today.plusDays(d.toLong())
+        Schedule.slotsOn(date).forEach { (t, doses) ->
+            val full = slotFull(doses); val skipped = Store.isSkipped(t)
+            if (t.isBefore(since) && !full) return@forEach
+            val state = when {
+                full -> SlotState.DONE
+                skipped -> SlotState.SKIPPED
+                next == null -> { next = t; SlotState.NEXT }
+                else -> SlotState.LATER
+            }
+            slots.add(Entry.Slot(t, doses, state))
+        }
+    }
+    if (next == null) Schedule.nextSlotAfter(today.plusDays(2).atTime(23, 59))?.let { t ->
+        slots.add(Entry.Slot(t, Schedule.dosesAt(t), SlotState.NEXT))
+    }
+    // Done and skipped stay above the next time even when they are later (marked early).
+    val nextT = slots.firstOrNull { it.state == SlotState.NEXT }?.time
+    val ordered = slots.sortedWith(compareBy({ if (it.state == SlotState.DONE || it.state == SlotState.SKIPPED) 0 else 1 }, { it.time }))
+        .let { list -> if (nextT == null) list else list.sortedBy { if (it.state == SlotState.DONE || it.state == SlotState.SKIPPED) -1 else if (it.time == nextT) 0 else 1 } }
+    val rows = ArrayList<Entry>()
+    var lastDay: LocalDate? = null
+    ordered.forEach { s ->
+        val d = s.time.toLocalDate()
+        if (d != lastDay) { rows.add(Entry.Day(d)); lastDay = d }
+        rows.add(s)
+    }
+    if (Store.plan().meds.any { it.prn != null }) rows.add(Entry.Prn)
+    return rows to rows.indexOfFirst { it is Entry.Slot && it.state == SlotState.NEXT }
+}
+
+private fun dayLabel(d: LocalDate, today: LocalDate) = when (d) {
+    today -> "היום"; today.plusDays(1) -> "מחר"; today.minusDays(1) -> "אתמול"; else -> Fmt.weekday(d)
+} + " · " + Fmt.dateYear(d)
 
 @Composable
 fun HomeScreen() {
@@ -94,15 +161,12 @@ fun HomeScreen() {
     val today = now.toLocalDate()
     val plan = Store.plan()
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(
-                Modifier.size(46.dp).clip(RoundedCornerShape(13.dp)).background(Brand),
-                contentAlignment = Alignment.Center,
-            ) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(Modifier.size(46.dp).clip(RoundedCornerShape(13.dp)).background(Brand), contentAlignment = Alignment.Center) {
                 androidx.compose.foundation.Image(
                     androidx.compose.ui.res.painterResource(com.tal.eyedrops.R.drawable.ic_launcher_fg), null,
                     modifier = Modifier.size(46.dp),
@@ -114,8 +178,8 @@ fun HomeScreen() {
                 Text("${Fmt.weekday(today)}, ${Fmt.dateYear(today)}", fontSize = 18.sp, color = Muted)
             }
             Box(
-                Modifier.size(56.dp).clip(androidx.compose.foundation.shape.CircleShape).background(CardBg)
-                    .border(if (Store.highContrast.value) 3.dp else 1.dp, Line, androidx.compose.foundation.shape.CircleShape),
+                Modifier.size(56.dp).clip(CircleShape).background(CardBg)
+                    .border(if (Store.highContrast.value) 3.dp else 1.dp, Line, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 IconButton(onClick = { Nav.openSettings() }, modifier = Modifier.size(56.dp)) {
@@ -126,7 +190,7 @@ fun HomeScreen() {
 
         if (plan.meds.isEmpty()) {
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(CardBg).padding(20.dp),
+                Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(CardBg).padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Text("עוד אין תוכנית תרופות", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
@@ -140,15 +204,190 @@ fun HomeScreen() {
                 }
             }
         } else {
-            NowCard(now)
-            DayList(now)
-            val prn = plan.meds.filter { it.prn != null }
-            if (prn.isNotEmpty()) {
-                Text("לפי הצורך", color = Muted, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                prn.forEach { PrnCard(it, now) }
+            Wheel(now)
+        }
+    }
+}
+
+/** The timeline as a wheel: the next time sits in the middle; taken times above, later times below. */
+@Composable
+private fun Wheel(now: LocalDateTime) {
+    Store.version.intValue
+    val ctx = LocalContext.current
+    val (rows, nextIndex) = buildRows(now)
+    val nextKey = (rows.getOrNull(nextIndex) as? Entry.Slot)?.time
+    val state = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var undo by remember { mutableStateOf<Entry.Slot?>(null) }
+    var skipAsk by remember { mutableStateOf<Entry.Slot?>(null) }
+
+    suspend fun center(animate: Boolean) {
+        if (nextIndex < 0) return
+        if (state.layoutInfo.visibleItemsInfo.none { it.index == nextIndex }) state.scrollToItem(nextIndex)
+        val li = state.layoutInfo
+        val info = li.visibleItemsInfo.firstOrNull { it.index == nextIndex } ?: return
+        val top = li.viewportStartOffset + li.beforeContentPadding
+        val bottom = li.viewportEndOffset - li.afterContentPadding
+        val delta = if (info.size > bottom - top) info.offset - top
+        else info.offset + info.size / 2 - (top + bottom) / 2
+        if (animate) state.animateScrollBy(delta.toFloat()) else state.scrollBy(delta.toFloat())
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val half = maxHeight / 2
+        LaunchedEffect(nextKey, maxHeight) { center(false); center(false) }
+        LazyColumn(
+            state = state,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = half, bottom = half),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            itemsIndexed(rows, key = { _, r -> when (r) { is Entry.Day -> "d" + r.date; is Entry.Slot -> "s" + r.time; Entry.Prn -> "prn" } }) { i, r ->
+                val wheelLook = if (i == nextIndex) Modifier else Modifier.graphicsLayer {
+                    val li = state.layoutInfo
+                    val info = li.visibleItemsInfo.firstOrNull { it.index == i }
+                    if (info != null) {
+                        val mid = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+                        val dist = (kotlin.math.abs(info.offset + info.size / 2f - mid) / (li.viewportEndOffset - li.viewportStartOffset) * 2f).coerceIn(0f, 1f)
+                        val s = 1f - dist * 0.12f
+                        scaleX = s; scaleY = s
+                        alpha = 1f - dist * 0.5f
+                    }
+                }
+                Box(wheelLook) {
+                    when (r) {
+                        is Entry.Day -> Text(dayLabel(r.date, now.toLocalDate()), fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                            color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), textAlign = TextAlign.Center)
+                        is Entry.Slot -> if (r.state == SlotState.NEXT) NextCard(r, now, onSkip = { skipAsk = r })
+                            else MiniSlot(r) { if (r.state != SlotState.LATER) undo = r }
+                        Entry.Prn -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("לפי הצורך", color = Muted, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Store.plan().meds.filter { it.prn != null }.forEach { PrnCard(it, now) }
+                        }
+                    }
+                }
             }
         }
-        Spacer(Modifier.height(24.dp))
+
+        val away by remember(nextIndex) {
+            derivedStateOf {
+                val li = state.layoutInfo
+                val info = li.visibleItemsInfo.firstOrNull { it.index == nextIndex }
+                nextIndex >= 0 && (info == null || kotlin.math.abs(info.offset + info.size / 2 - (li.viewportStartOffset + li.viewportEndOffset) / 2) > li.viewportEndOffset / 3)
+            }
+        }
+        if (away) {
+            Button(
+                onClick = { scope.launch { center(true) } },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp).height(56.dp),
+                shape = RoundedCornerShape(28.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = Color.White),
+            ) { Text("חזרה לבא", fontSize = 19.sp, fontWeight = FontWeight.Bold) }
+        }
+    }
+
+    undo?.let { r ->
+        AlertDialog(
+            onDismissRequest = { undo = null },
+            title = { Text(if (r.state == SlotState.SKIPPED) "להחזיר את ${Fmt.time(r.time.toLocalTime())}?" else "לבטל את הסימון של ${Fmt.time(r.time.toLocalTime())}?") },
+            text = { Text("המועד יחזור להיות לא מסומן.") },
+            confirmButton = {
+                Button(onClick = {
+                    if (r.state == SlotState.SKIPPED) Store.setSkipped(r.time, false)
+                    else Store.setDone(r.doses, false)
+                    Alarms.scheduleNext(ctx); undo = null
+                }) { Text("כן") }
+            },
+            dismissButton = { TextButton(onClick = { undo = null }) { Text("לא") } },
+        )
+    }
+    skipAsk?.let { r ->
+        AlertDialog(
+            onDismissRequest = { skipAsk = null },
+            title = { Text("לדלג על ${Fmt.time(r.time.toLocalTime())}?") },
+            text = { Text("המועד יסומן \"לא נלקח\" ולא \"בוצע\". המועד הבא יעבור למרכז.") },
+            confirmButton = {
+                Button(onClick = {
+                    Store.setSkipped(r.time, true); Alarms.cancelNotification(ctx, r.time); Alarms.scheduleNext(ctx); skipAsk = null
+                }, colors = ButtonDefaults.buttonColors(containerColor = Warn)) { Text("דלג") }
+            },
+            dismissButton = { TextButton(onClick = { skipAsk = null }) { Text("ביטול") } },
+        )
+    }
+}
+
+@Composable
+private fun MiniSlot(r: Entry.Slot, onClick: () -> Unit) {
+    val names = r.doses.map { it.med.name }.distinct()
+    val faded = r.state != SlotState.LATER
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(if (faded) DoneBg else CardBg)
+            .border(BorderW.dp, Line, RoundedCornerShape(18.dp))
+            .clickable(enabled = faded, onClick = onClick)
+            .alpha(if (faded) 0.6f else 1f)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(Fmt.time(r.time.toLocalTime()), fontSize = 26.sp, fontWeight = FontWeight.ExtraBold,
+            color = if (faded) Muted else Ink, modifier = Modifier.width(86.dp))
+        Text(if (names.size <= 2) names.joinToString(", ") else "${names.size} תרופות",
+            fontSize = 18.sp, color = Muted, modifier = Modifier.weight(1f), maxLines = 1)
+        when (r.state) {
+            SlotState.DONE -> Text("✓ בוצע", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Ok)
+            SlotState.SKIPPED -> Text("✗ לא נלקח", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Warn)
+            else -> {}
+        }
+    }
+}
+
+/** The next time, in the middle: the whole time is taken with one button. */
+@Composable
+private fun NextCard(r: Entry.Slot, now: LocalDateTime, onSkip: () -> Unit) {
+    val ctx = LocalContext.current
+    val mins = Duration.between(r.time, now).toMinutes() // >0 = in the past
+    val late = mins >= 60
+    val due = mins in 0..59
+    val today = now.toLocalDate()
+    val day = r.time.toLocalDate()
+    val dayText = when (day) { today -> "היום"; today.plusDays(1) -> "מחר"; today.minusDays(1) -> "אתמול"; else -> Fmt.weekday(day) } + ", " + Fmt.dateYear(day)
+    val whenText = when {
+        late -> "$dayText · עברו ${mins / 60} ש׳ ${mins % 60} ד׳"
+        due -> dayText
+        else -> { val m = -mins; "$dayText · בעוד " + (if (m >= 60) "${m / 60} ש׳ " else "") + "${m % 60} ד׳" }
+    }
+    val accent = if (late) Warn else Amber
+    val groups = r.doses.groupBy { it.med.id }.values.toList()
+    val many = groups.size > 4
+    val pendingMeasure = r.doses.filter { it.med.type == MedType.MEASURE && !Store.isDone(it) }
+    val drops = groups.count { it.first().med.type == MedType.DROPS }
+
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(NowBg)
+            .border(3.dp, accent, RoundedCornerShape(30.dp)).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(if (many) 8.dp else 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(if (late) "לא סומן" else if (due) "עכשיו" else "הבא", fontSize = 19.sp, fontWeight = FontWeight.ExtraBold,
+                color = if (late) Color.White else Ink,
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(accent).padding(horizontal = 14.dp, vertical = 2.dp))
+            Text(whenText, fontSize = 17.sp, fontWeight = if (late) FontWeight.Bold else FontWeight.Normal,
+                color = if (late) Warn else Muted, modifier = Modifier.weight(1f))
+        }
+        Text(Fmt.time(r.time.toLocalTime()), fontSize = 60.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = 62.sp)
+        groups.forEach { ds -> MedLine(ds, nameSize = if (many) 22 else 26) }
+        pendingMeasure.forEach { m -> BigButton("רשום ${m.med.name}") { Nav.measuring = m } }
+        if (r.doses.any { it.med.type != MedType.MEASURE && !Store.isDone(it) }) {
+            BigButton("לקחתי", check = true) { markSlot(ctx, r.time, r.doses) }
+        }
+        SecondButton("תזכיר לי בעוד 10 דקות") {
+            Alarms.cancelNotification(ctx, r.time); Alarms.scheduleFollow(ctx, r.time, 1, 10)
+            android.widget.Toast.makeText(ctx, "נזכיר שוב בעוד 10 דקות", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            if (drops > 1) TextButton(onClick = { Nav.screen = Screen.Focus(r.time.toString()) }) { Text("שלב אחר שלב", fontSize = 18.sp) }
+            else Spacer(Modifier.width(1.dp))
+            if (late) TextButton(onClick = onSkip) { Text("לא לקחתי, דלג", fontSize = 18.sp, color = Warn) }
+        }
     }
 }
 
@@ -156,8 +395,8 @@ fun HomeScreen() {
 fun BigButton(label: String, color: Color = Brand, check: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
         onClick = onClick, enabled = enabled,
-        modifier = Modifier.fillMaxWidth().height(88.dp),
-        shape = RoundedCornerShape(44.dp),
+        modifier = Modifier.fillMaxWidth().height(84.dp),
+        shape = RoundedCornerShape(42.dp),
         colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = Color.White),
     ) {
         if (check) { Icon(Icons.Filled.Check, null, modifier = Modifier.size(36.dp)); Spacer(Modifier.width(10.dp)) }
@@ -168,7 +407,7 @@ fun BigButton(label: String, color: Color = Brand, check: Boolean = false, enabl
 @Composable
 private fun SecondButton(label: String, onClick: () -> Unit) {
     Button(
-        onClick = onClick, modifier = Modifier.fillMaxWidth().height(60.dp), shape = RoundedCornerShape(30.dp),
+        onClick = onClick, modifier = Modifier.fillMaxWidth().height(58.dp), shape = RoundedCornerShape(29.dp),
         colors = ButtonDefaults.buttonColors(containerColor = SoftFill, contentColor = Ink),
         border = if (Store.highContrast.value) androidx.compose.foundation.BorderStroke(3.dp, Line) else null,
     ) {
@@ -176,151 +415,16 @@ private fun SecondButton(label: String, onClick: () -> Unit) {
     }
 }
 
-/** The one thing to do now, or the next thing coming up. */
-@Composable
-private fun NowCard(now: LocalDateTime) {
-    Store.version.intValue
-    val ctx = LocalContext.current
-    val today = now.toLocalDate()
-    val due = Schedule.slotsOn(today).filter { !it.first.isAfter(now) && !it.second.all { d -> Store.isDone(d) } }
-    val current = due.lastOrNull()
-    val upcoming = if (current == null) Schedule.nextSlotAfter(now) else null
-
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(if (current != null) NowBg else CardBg)
-            .border(if (current != null) 3.dp else BorderW.dp, if (current != null) Amber else Line, RoundedCornerShape(30.dp))
-            .padding(22.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        when {
-            current != null -> {
-                val (slot, doses) = current
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("עכשיו", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Ink,
-                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Amber).padding(horizontal = 14.dp, vertical = 2.dp))
-                    Spacer(Modifier.weight(1f))
-                    val n = doses.map { it.med.id }.distinct().size
-                    if (n > 1) Text("$n תרופות", fontSize = 18.sp, color = Muted)
-                }
-                Text(Fmt.time(slot.toLocalTime()), fontSize = 64.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = 66.sp)
-                doses.groupBy { it.med.id }.values.forEach { ds -> MedLine(ds, nameSize = 30) }
-                val pending = doses.filter { !Store.isDone(it) }
-                if (hasSeveral(pending.filter { it.med.type != MedType.MEASURE })) {
-                    BigButton("התחל", check = false) { Nav.screen = Screen.Focus(slot.toString()) }
-                } else if (pending.any { it.med.type == MedType.MEASURE }) {
-                    BigButton("רשום מדידה") { Nav.measuring = pending.first { it.med.type == MedType.MEASURE } }
-                } else {
-                    BigButton("לקחתי", check = true) { markSlot(ctx, slot, doses) }
-                }
-                SecondButton("תזכיר לי בעוד 10 דקות") {
-                    Alarms.cancelNotification(ctx, slot); Alarms.scheduleFollow(ctx, slot, 1, 10)
-                    android.widget.Toast.makeText(ctx, "נזכיר שוב בעוד 10 דקות", android.widget.Toast.LENGTH_SHORT).show()
-                }
-                if (due.size > 1) Text("יש עוד ${due.size - 1} מועדים קודמים שלא סומנו, ברשימה למטה.", fontSize = 17.sp, color = Warn)
-            }
-            upcoming != null -> {
-                val mins = Duration.between(now, upcoming).toMinutes()
-                val inText = when {
-                    upcoming.toLocalDate() != today -> if (upcoming.toLocalDate() == today.plusDays(1)) "מחר" else Fmt.date(upcoming.toLocalDate())
-                    mins >= 60 -> "בעוד ${mins / 60} ש׳ ${mins % 60} ד׳"
-                    else -> "בעוד $mins דקות"
-                }
-                Text("הבא · $inText", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Muted)
-                Text(Fmt.time(upcoming.toLocalTime()), fontSize = 56.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = 58.sp)
-                Schedule.dosesAt(upcoming).groupBy { it.med.id }.values.forEach { ds -> MedLine(ds, nameSize = 26) }
-            }
-            else -> {
-                Text("אין תרופות מתוכננות", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
-            }
-        }
-    }
-}
-
 @Composable
 private fun MedLine(ds: List<Dose>, nameSize: Int) {
     val med = ds.first().med
-    val done = ds.all { Store.isDone(it) }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(width = 14.dp, height = 44.dp).clip(RoundedCornerShape(6.dp)).background(Color(Palette[med.color])))
+        Box(Modifier.size(width = 13.dp, height = 42.dp).clip(RoundedCornerShape(6.dp)).background(Color(Palette[med.color])))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(med.name, fontSize = nameSize.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = (nameSize + 4).sp)
             val sub = subLine(ds)
-            if (sub.isNotEmpty()) Text(sub, fontSize = 20.sp, color = Muted)
-        }
-        if (done) Icon(Icons.Filled.Check, "בוצע", tint = Ok, modifier = Modifier.size(34.dp))
-    }
-}
-
-/** All times of a day, with big check boxes. Arrows move to other days. */
-@Composable
-private fun DayList(now: LocalDateTime) {
-    Store.version.intValue
-    val ctx = LocalContext.current
-    var day by remember { mutableStateOf(now.toLocalDate()) }
-    val today = now.toLocalDate()
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { day = day.minusDays(1) }, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Filled.KeyboardArrowRight, "יום קודם", tint = Ink, modifier = Modifier.size(36.dp))
-            }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                val title = when (day) { today -> "כל היום"; today.plusDays(1) -> "מחר"; today.minusDays(1) -> "אתמול"; else -> Fmt.weekday(day) }
-                Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink)
-                if (day != today) TextButton(onClick = { day = today }) { Text("חזרה להיום", fontSize = 17.sp) }
-                else Text(Fmt.dateYear(day), fontSize = 17.sp, color = Muted)
-            }
-            IconButton(onClick = { day = day.plusDays(1) }, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Filled.KeyboardArrowLeft, "יום הבא", tint = Ink, modifier = Modifier.size(36.dp))
-            }
-        }
-        val slots = Schedule.slotsOn(day)
-        if (slots.isEmpty()) Text("אין תרופות ביום הזה", fontSize = 19.sp, color = Muted)
-        slots.forEach { (time, doses) ->
-            val allDone = doses.all { Store.isDone(it) }
-            val missed = !allDone && !time.isAfter(now)
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(if (allDone) DoneBg else CardBg)
-                    .border(if (missed) 3.dp else BorderW.dp, if (missed) Warn else Line, RoundedCornerShape(20.dp))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(Fmt.time(time.toLocalTime()), fontSize = 30.sp, fontWeight = FontWeight.ExtraBold,
-                        color = if (allDone) Muted else Ink, modifier = Modifier.weight(1f))
-                    when {
-                        allDone -> Text("בוצע ✓", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ok)
-                        missed -> Text("לא סומן", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Warn)
-                    }
-                }
-                doses.groupBy { it.med.id }.values.forEach { ds ->
-                    val med = ds.first().med
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(width = 12.dp, height = 40.dp).clip(RoundedCornerShape(5.dp)).background(Color(Palette[med.color])))
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(med.name, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink)
-                            val sub = subLine(ds)
-                            if (sub.isNotEmpty()) Text(sub, fontSize = 17.sp, color = Muted)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ds.sortedBy { it.site }.forEach { d ->
-                                if (med.type == MedType.MEASURE) {
-                                    OutlinedButton(onClick = { Nav.measuring = d }, modifier = Modifier.height(56.dp)) {
-                                        Text(Store.measurement(d) ?: "רשום", fontSize = 18.sp)
-                                    }
-                                } else {
-                                    val label = if (med.sites.size > 1) d.siteName?.split(" ")?.lastOrNull() else null
-                                    CheckChip(on = Store.isDone(d), label = label) {
-                                        Store.toggle(d).forEach { Alarms.notifyRefill(ctx, it) }
-                                        if (Store.slotDone(time)) Alarms.cancelNotification(ctx, time)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            if (sub.isNotEmpty()) Text(sub, fontSize = 19.sp, color = Muted)
         }
     }
 }

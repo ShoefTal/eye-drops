@@ -24,6 +24,21 @@ object Store {
         prefs = c.applicationContext.getSharedPreferences("toma", Context.MODE_PRIVATE)
         highContrast.value = prefs.getBoolean("hc", false)
         textScale.floatValue = prefs.getFloat("textScale", 1.15f)
+        // Plans saved before tracking existed start counting now, so old unmarked times don't pile up.
+        if (!prefs.contains("since") && plan().meds.isNotEmpty()) markSince()
+    }
+
+    /** Times before this were never tracked (the plan was loaded later): they are not shown as missed. */
+    fun since(): LocalDateTime =
+        prefs.getString("since", null)?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() } ?: LocalDateTime.MIN
+    fun markSince() { prefs.edit().putString("since", LocalDateTime.now().withSecond(0).withNano(0).toString()).apply() }
+
+    /** Reminder times the user chose to skip: they leave the "next" window but are not counted as taken. */
+    private fun skippedSet(): Set<String> = prefs.getStringSet("skipped", emptySet()) ?: emptySet()
+    fun isSkipped(slot: LocalDateTime) = slot.toString() in skippedSet()
+    fun setSkipped(slot: LocalDateTime, on: Boolean) {
+        val s = HashSet(skippedSet()); if (on) s.add(slot.toString()) else s.remove(slot.toString())
+        prefs.edit().putStringSet("skipped", s).apply(); bump()
     }
 
     fun setHighContrast(on: Boolean) { highContrast.value = on; prefs.edit().putBoolean("hc", on).apply(); bump() }
@@ -53,6 +68,7 @@ object Store {
     }
 
     fun savePlan(p: PlanData) {
+        if (plan().meds.isEmpty() && p.meds.isNotEmpty()) markSince()
         cached = p
         prefs.edit().putString("plan", p.toJson()).apply()
         bump()
@@ -72,7 +88,7 @@ object Store {
     fun clearPlan() {
         val e = prefs.edit()
         plan().meds.forEach { m -> e.remove("rot_${m.id}").remove("stock_${m.id}").remove("prn_${m.id}") }
-        e.remove("done").remove("rotUsed").remove("meas").remove("testAt")
+        e.remove("done").remove("rotUsed").remove("meas").remove("testAt").remove("skipped").remove("since")
         e.apply()
         savePlan(PlanData.EMPTY)
     }

@@ -237,7 +237,7 @@ private fun ImportDialog(plan: PlanData) {
         },
         confirmButton = {
             Button(onClick = {
-                Store.savePlan(plan); Nav.pendingImport = null; Alarms.scheduleNext(ctx)
+                Store.savePlan(plan); Store.markSince(); Nav.pendingImport = null; Alarms.scheduleNext(ctx)
                 Toast.makeText(ctx, "התוכנית התקבלה", Toast.LENGTH_SHORT).show()
             }) { Text("קבל") }
         },
