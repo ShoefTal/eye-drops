@@ -242,7 +242,7 @@ private fun Wheel(now: LocalDateTime) {
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = half, bottom = half),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            itemsIndexed(rows, key = { _, r -> when (r) { is Entry.Day -> "d" + r.date; is Entry.Slot -> "s" + r.time; Entry.Prn -> "prn" } }) { i, r ->
+            itemsIndexed(rows, key = { i, r -> when (r) { is Entry.Day -> "d$i-" + r.date; is Entry.Slot -> "s" + r.time; Entry.Prn -> "prn" } }) { i, r ->
                 val wheelLook = if (i == nextIndex) Modifier else Modifier.graphicsLayer {
                     val li = state.layoutInfo
                     val info = li.visibleItemsInfo.firstOrNull { it.index == i }
