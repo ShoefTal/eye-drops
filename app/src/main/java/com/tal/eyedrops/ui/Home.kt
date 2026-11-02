@@ -72,6 +72,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import java.time.Duration
 import java.time.LocalDateTime
 import java.util.Locale
@@ -92,63 +99,61 @@ private fun markSlot(ctx: Context, slot: LocalDateTime, doses: List<Dose>) {
     Alarms.scheduleNext(ctx)
 }
 
-// ------------------------------------------------------------ home: the wheel
+// ------------------------------------------------------------ home: days to swipe, today as a wheel
 
-/** One row of the wheel: a day label, or one reminder time with its doses. */
+private enum class SlotState { RESOLVED, NEXT, LATER }
+
+/** One row of a day: a day label, or one reminder time with its doses. */
 private sealed class Entry {
     data class Day(val date: LocalDate) : Entry()
     data class Slot(val time: LocalDateTime, val doses: List<Dose>, val state: SlotState) : Entry()
     data object Prn : Entry()
 }
-private enum class SlotState { DONE, SKIPPED, NEXT, LATER }
 
-private fun slotFull(doses: List<Dose>) = doses.isNotEmpty() && doses.all { Store.isDone(it) }
+private fun resolved(doses: List<Dose>) = doses.isNotEmpty() && doses.all { Store.isMarked(it) }
 
 /**
- * Yesterday to the day after tomorrow. The "next" time is the earliest one not taken
- * (and not skipped) since the plan was loaded; it stays next until it is marked.
+ * The next time: the earliest one since the plan was loaded where some dose has no mark yet.
+ * It stays next, with its own date, until every dose in it is marked taken or not taken.
  */
-private fun buildRows(now: LocalDateTime): Pair<List<Entry>, Int> {
+private fun nextSlot(now: LocalDateTime): LocalDateTime? {
     val since = Store.since()
     val today = now.toLocalDate()
-    val slots = ArrayList<Entry.Slot>()
-    var next: LocalDateTime? = null
-    for (d in -1..2) {
+    for (d in -7..2) {
         val date = today.plusDays(d.toLong())
-        Schedule.slotsOn(date).forEach { (t, doses) ->
-            val full = slotFull(doses); val skipped = Store.isSkipped(t)
-            if (t.isBefore(since) && !full) return@forEach
-            val state = when {
-                full -> SlotState.DONE
-                skipped -> SlotState.SKIPPED
-                next == null -> { next = t; SlotState.NEXT }
-                else -> SlotState.LATER
-            }
-            slots.add(Entry.Slot(t, doses, state))
-        }
+        if (date.plusDays(1).atStartOfDay().isBefore(since)) continue
+        Schedule.slotsOn(date).forEach { (t, doses) -> if (!t.isBefore(since) && !resolved(doses)) return t }
     }
-    if (next == null) Schedule.nextSlotAfter(today.plusDays(2).atTime(23, 59))?.let { t ->
-        slots.add(Entry.Slot(t, Schedule.dosesAt(t), SlotState.NEXT))
-    }
-    // Done and skipped stay above the next time even when they are later (marked early).
-    val nextT = slots.firstOrNull { it.state == SlotState.NEXT }?.time
-    val ordered = slots.sortedWith(compareBy({ if (it.state == SlotState.DONE || it.state == SlotState.SKIPPED) 0 else 1 }, { it.time }))
-        .let { list -> if (nextT == null) list else list.sortedBy { if (it.state == SlotState.DONE || it.state == SlotState.SKIPPED) -1 else if (it.time == nextT) 0 else 1 } }
-    val rows = ArrayList<Entry>()
-    var lastDay: LocalDate? = null
-    ordered.forEach { s ->
-        val d = s.time.toLocalDate()
-        if (d != lastDay) { rows.add(Entry.Day(d)); lastDay = d }
-        rows.add(s)
-    }
-    if (Store.plan().meds.any { it.prn != null }) rows.add(Entry.Prn)
-    return rows to rows.indexOfFirst { it is Entry.Slot && it.state == SlotState.NEXT }
+    return Schedule.nextSlotAfter(today.plusDays(2).atTime(23, 59))
 }
 
-private fun dayLabel(d: LocalDate, today: LocalDate) = when (d) {
-    today -> "היום"; today.plusDays(1) -> "מחר"; today.minusDays(1) -> "אתמול"; else -> Fmt.weekday(d)
-} + " · " + Fmt.dateYear(d)
+/** Today's page: today's marked times above, the next time, then the rest of today. */
+private fun todayRows(now: LocalDateTime): Pair<List<Entry>, Int> {
+    val today = now.toLocalDate()
+    val next = nextSlot(now)
+    val rows = ArrayList<Entry>()
+    val day = Schedule.slotsOn(today)
+    day.filter { resolved(it.second) && it.first != next }.forEach { (t, ds) -> rows.add(Entry.Slot(t, ds, SlotState.RESOLVED)) }
+    var nextIndex = -1
+    if (next != null) {
+        if (next.toLocalDate() != today) rows.add(Entry.Day(next.toLocalDate()))
+        nextIndex = rows.size
+        rows.add(Entry.Slot(next, Schedule.dosesAt(next), SlotState.NEXT))
+        if (next.toLocalDate() != today && day.any { !resolved(it.second) && it.first != next }) rows.add(Entry.Day(today))
+    }
+    day.filter { !resolved(it.second) && it.first != next }.forEach { (t, ds) -> rows.add(Entry.Slot(t, ds, SlotState.LATER)) }
+    if (Store.plan().meds.any { it.prn != null }) rows.add(Entry.Prn)
+    return rows to nextIndex
+}
 
+private fun dayName(d: LocalDate, today: LocalDate) = when (d) {
+    today -> "היום"; today.plusDays(1) -> "מחר"; today.minusDays(1) -> "אתמול"; else -> Fmt.weekday(d)
+}
+
+private const val DAYS_BACK = 60
+private const val DAYS_FWD = 60
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen() {
     Store.version.intValue // recompose when data changes
@@ -160,6 +165,9 @@ fun HomeScreen() {
     LaunchedEffect(Unit) { while (true) { delay(20_000); now = LocalDateTime.now() } }
     val today = now.toLocalDate()
     val plan = Store.plan()
+    val pager = rememberPagerState(initialPage = DAYS_BACK) { DAYS_BACK + DAYS_FWD + 1 }
+    val scope = rememberCoroutineScope()
+    val shown = today.plusDays((pager.currentPage - DAYS_BACK).toLong())
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -203,23 +211,42 @@ fun HomeScreen() {
                     Text("טען תוכנית מקובץ", fontSize = 20.sp)
                 }
             }
-        } else {
-            Wheel(now)
+            return@Column
+        }
+
+        // Day strip: arrows and the day shown; swiping the page does the same.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }, modifier = Modifier.size(52.dp)) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "יום קודם", tint = Ink, modifier = Modifier.size(34.dp))
+            }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("${dayName(shown, today)} · ${Fmt.dateYear(shown)}", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink)
+                if (shown != today) TextButton(onClick = { scope.launch { pager.animateScrollToPage(DAYS_BACK) } }) {
+                    Text("חזרה להיום", fontSize = 17.sp)
+                }
+            }
+            IconButton(onClick = { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }, modifier = Modifier.size(52.dp)) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "יום הבא", tint = Ink, modifier = Modifier.size(34.dp))
+            }
+        }
+
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 0) { page ->
+            val date = today.plusDays((page - DAYS_BACK).toLong())
+            if (date == today) TodayWheel(now) else DayPage(date, now)
         }
     }
 }
 
-/** The timeline as a wheel: the next time sits in the middle; taken times above, later times below. */
+/** Today: the next time sits in the middle; today's marked times above, the rest of today below. */
 @Composable
-private fun Wheel(now: LocalDateTime) {
+private fun TodayWheel(now: LocalDateTime) {
     Store.version.intValue
     val ctx = LocalContext.current
-    val (rows, nextIndex) = buildRows(now)
+    val (rows, nextIndex) = todayRows(now)
     val nextKey = (rows.getOrNull(nextIndex) as? Entry.Slot)?.time
     val state = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var undo by remember { mutableStateOf<Entry.Slot?>(null) }
-    var skipAsk by remember { mutableStateOf<Entry.Slot?>(null) }
 
     suspend fun center(animate: Boolean) {
         if (nextIndex < 0) return
@@ -242,6 +269,9 @@ private fun Wheel(now: LocalDateTime) {
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = half, bottom = half),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (rows.none { it is Entry.Slot }) item {
+                Text("אין תרופות היום", fontSize = 20.sp, color = Muted, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            }
             itemsIndexed(rows, key = { i, r -> when (r) { is Entry.Day -> "d$i-" + r.date; is Entry.Slot -> "s" + r.time; Entry.Prn -> "prn" } }) { i, r ->
                 val wheelLook = if (i == nextIndex) Modifier else Modifier.graphicsLayer {
                     val li = state.layoutInfo
@@ -256,10 +286,11 @@ private fun Wheel(now: LocalDateTime) {
                 }
                 Box(wheelLook) {
                     when (r) {
-                        is Entry.Day -> Text(dayLabel(r.date, now.toLocalDate()), fontSize = 17.sp, fontWeight = FontWeight.Bold,
-                            color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), textAlign = TextAlign.Center)
-                        is Entry.Slot -> if (r.state == SlotState.NEXT) NextCard(r, now, onSkip = { skipAsk = r })
-                            else MiniSlot(r) { if (r.state != SlotState.LATER) undo = r }
+                        is Entry.Day -> Text("${dayName(r.date, now.toLocalDate())} · ${Fmt.dateYear(r.date)}", fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold, color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            textAlign = TextAlign.Center)
+                        is Entry.Slot -> if (r.state == SlotState.NEXT) NextCard(r, now)
+                            else MiniSlot(r) { if (r.state == SlotState.RESOLVED) undo = r }
                         Entry.Prn -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("לפי הצורך", color = Muted, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             Store.plan().meds.filter { it.prn != null }.forEach { PrnCard(it, now) }
@@ -289,37 +320,67 @@ private fun Wheel(now: LocalDateTime) {
     undo?.let { r ->
         AlertDialog(
             onDismissRequest = { undo = null },
-            title = { Text(if (r.state == SlotState.SKIPPED) "להחזיר את ${Fmt.time(r.time.toLocalTime())}?" else "לבטל את הסימון של ${Fmt.time(r.time.toLocalTime())}?") },
-            text = { Text("המועד יחזור להיות לא מסומן.") },
+            title = { Text("לבטל את הסימונים של ${Fmt.time(r.time.toLocalTime())}?") },
+            text = { Text("כל התרופות במועד הזה יחזרו להיות לא מסומנות, והוא יחזור להיות הבא.") },
             confirmButton = {
-                Button(onClick = {
-                    if (r.state == SlotState.SKIPPED) Store.setSkipped(r.time, false)
-                    else Store.setDone(r.doses, false)
-                    Alarms.scheduleNext(ctx); undo = null
-                }) { Text("כן") }
+                Button(onClick = { Store.setStatus(r.doses, 0); Alarms.scheduleNext(ctx); undo = null }) { Text("כן") }
             },
             dismissButton = { TextButton(onClick = { undo = null }) { Text("לא") } },
         )
     }
-    skipAsk?.let { r ->
-        AlertDialog(
-            onDismissRequest = { skipAsk = null },
-            title = { Text("לדלג על ${Fmt.time(r.time.toLocalTime())}?") },
-            text = { Text("המועד יסומן \"לא נלקח\" ולא \"בוצע\". המועד הבא יעבור למרכז.") },
-            confirmButton = {
-                Button(onClick = {
-                    Store.setSkipped(r.time, true); Alarms.cancelNotification(ctx, r.time); Alarms.scheduleNext(ctx); skipAsk = null
-                }, colors = ButtonDefaults.buttonColors(containerColor = Warn)) { Text("דלג") }
-            },
-            dismissButton = { TextButton(onClick = { skipAsk = null }) { Text("ביטול") } },
-        )
+}
+
+/** Another day: every time of that day, each med marked taken or not taken. */
+@Composable
+private fun DayPage(date: LocalDate, now: LocalDateTime) {
+    Store.version.intValue
+    val slots = Schedule.slotsOn(date)
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 40.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (slots.isEmpty()) item {
+            Text("אין תרופות ביום הזה", fontSize = 20.sp, color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                textAlign = TextAlign.Center)
+        }
+        items(slots, key = { it.first.toString() }) { (t, doses) -> DayCard(t, doses, now) }
     }
+}
+
+@Composable
+private fun DayCard(time: LocalDateTime, doses: List<Dose>, now: LocalDateTime) {
+    val allTaken = doses.all { Store.isDone(it) }
+    val open = !resolved(doses)
+    val missed = open && time.isBefore(now.minusMinutes(59))
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(if (open) CardBg else DoneBg)
+            .border(if (missed) 3.dp else BorderW.dp, if (missed) Warn else Line, RoundedCornerShape(20.dp)).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(Fmt.time(time.toLocalTime()), fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = Ink, modifier = Modifier.weight(1f))
+            when {
+                allTaken -> Text("✓ בוצע", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Ok)
+                !open -> Text(markSummary(doses), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Muted)
+                missed -> Text("לא סומן", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Warn)
+            }
+        }
+        doses.groupBy { it.med.id }.values.forEach { ds -> MedMarkRow(ds, nameSize = 20) }
+    }
+}
+
+private fun markSummary(doses: List<Dose>): String {
+    val groups = doses.groupBy { it.med.id }.values
+    val taken = groups.count { g -> g.all { Store.isDone(it) } }
+    val notTaken = groups.size - taken
+    return if (notTaken == 0) "✓ בוצע" else "✓ $taken · ✗ $notTaken"
 }
 
 @Composable
 private fun MiniSlot(r: Entry.Slot, onClick: () -> Unit) {
     val names = r.doses.map { it.med.name }.distinct()
-    val faded = r.state != SlotState.LATER
+    val faded = r.state == SlotState.RESOLVED
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(if (faded) DoneBg else CardBg)
             .border(BorderW.dp, Line, RoundedCornerShape(18.dp))
@@ -332,24 +393,23 @@ private fun MiniSlot(r: Entry.Slot, onClick: () -> Unit) {
             color = if (faded) Muted else Ink, modifier = Modifier.width(86.dp))
         Text(if (names.size <= 2) names.joinToString(", ") else "${names.size} תרופות",
             fontSize = 18.sp, color = Muted, modifier = Modifier.weight(1f), maxLines = 1)
-        when (r.state) {
-            SlotState.DONE -> Text("✓ בוצע", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Ok)
-            SlotState.SKIPPED -> Text("✗ לא נלקח", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Warn)
-            else -> {}
+        if (faded) {
+            val s = markSummary(r.doses)
+            Text(s, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (s.contains("✗")) Warn else Ok)
         }
     }
 }
 
-/** The next time, in the middle: the whole time is taken with one button. */
+/** The next time, in the middle: each med marked taken / not taken, or all at once. */
 @Composable
-private fun NextCard(r: Entry.Slot, now: LocalDateTime, onSkip: () -> Unit) {
+private fun NextCard(r: Entry.Slot, now: LocalDateTime) {
     val ctx = LocalContext.current
     val mins = Duration.between(r.time, now).toMinutes() // >0 = in the past
     val late = mins >= 60
     val due = mins in 0..59
     val today = now.toLocalDate()
     val day = r.time.toLocalDate()
-    val dayText = when (day) { today -> "היום"; today.plusDays(1) -> "מחר"; today.minusDays(1) -> "אתמול"; else -> Fmt.weekday(day) } + ", " + Fmt.dateYear(day)
+    val dayText = dayName(day, today) + ", " + Fmt.dateYear(day)
     val whenText = when {
         late -> "$dayText · עברו ${mins / 60} ש׳ ${mins % 60} ד׳"
         due -> dayText
@@ -358,12 +418,12 @@ private fun NextCard(r: Entry.Slot, now: LocalDateTime, onSkip: () -> Unit) {
     val accent = if (late) Warn else Amber
     val groups = r.doses.groupBy { it.med.id }.values.toList()
     val many = groups.size > 4
-    val pendingMeasure = r.doses.filter { it.med.type == MedType.MEASURE && !Store.isDone(it) }
+    val unmarked = r.doses.filter { !Store.isMarked(it) && it.med.type != MedType.MEASURE }
     val drops = groups.count { it.first().med.type == MedType.DROPS }
 
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(NowBg)
-            .border(3.dp, accent, RoundedCornerShape(30.dp)).padding(20.dp),
+            .border(3.dp, accent, RoundedCornerShape(30.dp)).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(if (many) 8.dp else 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -373,21 +433,68 @@ private fun NextCard(r: Entry.Slot, now: LocalDateTime, onSkip: () -> Unit) {
             Text(whenText, fontSize = 17.sp, fontWeight = if (late) FontWeight.Bold else FontWeight.Normal,
                 color = if (late) Warn else Muted, modifier = Modifier.weight(1f))
         }
-        Text(Fmt.time(r.time.toLocalTime()), fontSize = 60.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = 62.sp)
-        groups.forEach { ds -> MedLine(ds, nameSize = if (many) 22 else 26) }
-        pendingMeasure.forEach { m -> BigButton("רשום ${m.med.name}") { Nav.measuring = m } }
-        if (r.doses.any { it.med.type != MedType.MEASURE && !Store.isDone(it) }) {
-            BigButton("לקחתי", check = true) { markSlot(ctx, r.time, r.doses) }
+        Text(Fmt.time(r.time.toLocalTime()), fontSize = 58.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = 60.sp)
+        groups.forEach { ds -> MedMarkRow(ds, nameSize = if (many) 21 else 24) }
+        if (unmarked.isNotEmpty()) {
+            val partial = unmarked.size < r.doses.count { it.med.type != MedType.MEASURE }
+            BigButton(if (partial) "לקחתי את השאר" else "לקחתי הכול", check = true) {
+                Store.setStatus(unmarked, 1).forEach { Alarms.notifyRefill(ctx, it) }
+                if (Store.slotDone(r.time)) Alarms.cancelNotification(ctx, r.time)
+                Alarms.scheduleNext(ctx)
+            }
         }
         SecondButton("תזכיר לי בעוד 10 דקות") {
             Alarms.cancelNotification(ctx, r.time); Alarms.scheduleFollow(ctx, r.time, 1, 10)
             android.widget.Toast.makeText(ctx, "נזכיר שוב בעוד 10 דקות", android.widget.Toast.LENGTH_SHORT).show()
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            if (drops > 1) TextButton(onClick = { Nav.screen = Screen.Focus(r.time.toString()) }) { Text("שלב אחר שלב", fontSize = 18.sp) }
-            else Spacer(Modifier.width(1.dp))
-            if (late) TextButton(onClick = onSkip) { Text("לא לקחתי, דלג", fontSize = 18.sp, color = Warn) }
+        if (drops > 1) TextButton(onClick = { Nav.screen = Screen.Focus(r.time.toString()) }) { Text("שלב אחר שלב", fontSize = 18.sp) }
+    }
+}
+
+/** One med at one time, with "taken" and "not taken" buttons. A second tap clears the mark. */
+@Composable
+private fun MedMarkRow(ds: List<Dose>, nameSize: Int) {
+    val ctx = LocalContext.current
+    val med = ds.first().med
+    val taken = ds.all { Store.isDone(it) }
+    val notTaken = !taken && ds.all { Store.isMissed(it) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(width = 12.dp, height = 40.dp).clip(RoundedCornerShape(6.dp)).background(Color(Palette[med.color])))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(med.name, fontSize = nameSize.sp, fontWeight = FontWeight.ExtraBold, lineHeight = (nameSize + 4).sp,
+                color = if (notTaken) Muted else Ink)
+            val sub = if (med.type == MedType.MEASURE) (ds.firstNotNullOfOrNull { Store.measurement(it) } ?: "") else subLine(ds)
+            if (sub.isNotEmpty()) Text(sub, fontSize = 17.sp, color = Muted)
         }
+        Spacer(Modifier.width(8.dp))
+        fun tap(st: Int) {
+            Store.setStatus(ds, st).forEach { Alarms.notifyRefill(ctx, it) }
+            if (Store.slotDone(ds.first().time)) Alarms.cancelNotification(ctx, ds.first().time)
+            Alarms.scheduleNext(ctx)
+        }
+        if (med.type == MedType.MEASURE && !taken) {
+            MarkButton("רשום", on = false, color = Brand) { Nav.measuring = ds.first() }
+        } else {
+            MarkButton("✓", on = taken, color = Ok, label = "נלקח: ${med.name}") { tap(if (taken) 0 else 1) }
+        }
+        Spacer(Modifier.width(8.dp))
+        MarkButton("✗", on = notTaken, color = Warn, label = "לא נלקח: ${med.name}") { tap(if (notTaken) 0 else -1) }
+    }
+}
+
+@Composable
+private fun MarkButton(text: String, on: Boolean, color: Color, label: String? = null, onClick: () -> Unit) {
+    Box(
+        Modifier.size(width = 60.dp, height = 56.dp).clip(RoundedCornerShape(16.dp))
+            .background(if (on) color else CardBg)
+            .border(if (on) 0.dp else 2.dp, if (on) color else Line, RoundedCornerShape(16.dp))
+            .clickable(onClickLabel = label, onClick = onClick)
+            .semantics { if (label != null) contentDescription = label + if (on) ", מסומן" else "" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, fontSize = if (text.length > 1) 18.sp else 26.sp, fontWeight = FontWeight.ExtraBold,
+            color = if (on) Color.White else if (text == "✗") Warn else Ink)
     }
 }
 
@@ -395,12 +502,12 @@ private fun NextCard(r: Entry.Slot, now: LocalDateTime, onSkip: () -> Unit) {
 fun BigButton(label: String, color: Color = Brand, check: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
         onClick = onClick, enabled = enabled,
-        modifier = Modifier.fillMaxWidth().height(84.dp),
-        shape = RoundedCornerShape(42.dp),
+        modifier = Modifier.fillMaxWidth().height(80.dp),
+        shape = RoundedCornerShape(40.dp),
         colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = Color.White),
     ) {
-        if (check) { Icon(Icons.Filled.Check, null, modifier = Modifier.size(36.dp)); Spacer(Modifier.width(10.dp)) }
-        Text(label, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold)
+        if (check) { Icon(Icons.Filled.Check, null, modifier = Modifier.size(34.dp)); Spacer(Modifier.width(10.dp)) }
+        Text(label, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
     }
 }
 
@@ -412,20 +519,6 @@ private fun SecondButton(label: String, onClick: () -> Unit) {
         border = if (Store.highContrast.value) androidx.compose.foundation.BorderStroke(3.dp, Line) else null,
     ) {
         Text(label, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink)
-    }
-}
-
-@Composable
-private fun MedLine(ds: List<Dose>, nameSize: Int) {
-    val med = ds.first().med
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(width = 13.dp, height = 42.dp).clip(RoundedCornerShape(6.dp)).background(Color(Palette[med.color])))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(med.name, fontSize = nameSize.sp, fontWeight = FontWeight.ExtraBold, color = Ink, lineHeight = (nameSize + 4).sp)
-            val sub = subLine(ds)
-            if (sub.isNotEmpty()) Text(sub, fontSize = 19.sp, color = Muted)
-        }
     }
 }
 
@@ -473,7 +566,7 @@ fun FocusScreen(slotText: String) {
 
     val doses = Schedule.dosesAt(slot)
     val steps = doses.filter { it.med.type != MedType.MEASURE }
-    val current = steps.firstOrNull { !Store.isDone(it) }
+    val current = steps.firstOrNull { !Store.isMarked(it) }
     val measures = doses.filter { it.med.type == MedType.MEASURE && !Store.isDone(it) }
     val stepNo = steps.indexOf(current) + 1
 
@@ -494,7 +587,7 @@ fun FocusScreen(slotText: String) {
         if (steps.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 steps.forEach { d ->
-                    Box(Modifier.weight(1f).height(12.dp).clip(RoundedCornerShape(6.dp)).background(if (Store.isDone(d)) Brand else Line))
+                    Box(Modifier.weight(1f).height(12.dp).clip(RoundedCornerShape(6.dp)).background(if (Store.isDone(d)) Brand else if (Store.isMissed(d)) Warn else Line))
                 }
             }
         }
@@ -549,7 +642,7 @@ fun FocusScreen(slotText: String) {
             BigButton("נתתי", check = true) {
                 Store.setDone(listOf(current), true).forEach { Alarms.notifyRefill(ctx, it) }
                 lastGiven = LocalDateTime.now(); lastWasDrop = med.type == MedType.DROPS; skipWait = false
-                val next = steps.firstOrNull { !Store.isDone(it) }
+                val next = steps.firstOrNull { !Store.isMarked(it) }
                 if (next == null) {
                     Alarms.cancelNotification(ctx, slot); Alarms.scheduleNext(ctx)
                 } else if (lastWasDrop && next.med.type == MedType.DROPS) {

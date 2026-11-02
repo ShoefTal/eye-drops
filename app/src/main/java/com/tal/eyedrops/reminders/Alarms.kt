@@ -149,7 +149,7 @@ object Alarms {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(c, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
-        val doses = Schedule.dosesAt(slot).filter { !Store.isDone(it) }
+        val doses = Schedule.dosesAt(slot).filter { !Store.isMarked(it) }
         if (doses.isEmpty()) return
         val byMed = doses.groupBy { it.med.id }.values.toList()
         val lines = byMed.mapIndexed { i, ds -> "${i + 1}. " + doseLine(ds) }

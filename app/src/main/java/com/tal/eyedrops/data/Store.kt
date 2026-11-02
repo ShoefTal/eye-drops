@@ -88,7 +88,7 @@ object Store {
     fun clearPlan() {
         val e = prefs.edit()
         plan().meds.forEach { m -> e.remove("rot_${m.id}").remove("stock_${m.id}").remove("prn_${m.id}") }
-        e.remove("done").remove("rotUsed").remove("meas").remove("testAt").remove("skipped").remove("since")
+        e.remove("done").remove("rotUsed").remove("meas").remove("testAt").remove("skipped").remove("missed").remove("since")
         e.apply()
         savePlan(PlanData.EMPTY)
     }
@@ -164,9 +164,37 @@ object Store {
 
     fun toggle(d: Dose): List<Med> = setDone(listOf(d), !isDone(d))
 
+    // ---- "not taken" marks ----
+    private fun missedSet(): Set<String> = prefs.getStringSet("missed", emptySet()) ?: emptySet()
+
+    /** Marked "not taken" (one dose, or the whole time skipped in an earlier version). */
+    fun isMissed(d: Dose) = d.key in missedSet() || isSkipped(d.time)
+
+    /** Has a mark either way. */
+    fun isMarked(d: Dose) = isDone(d) || isMissed(d)
+
+    /** 1 = taken, -1 = not taken, 0 = clear. Keeps stock and rotation in step. Returns meds that hit the refill level. */
+    fun setStatus(doses: List<Dose>, status: Int): List<Med> {
+        val low = if (status == 1) setDone(doses, true) else { setDone(doses, false); emptyList() }
+        val m = HashSet(missedSet())
+        doses.forEach { if (status == -1) m.add(it.key) else m.remove(it.key) }
+        val e = prefs.edit().putStringSet("missed", m)
+        // a legacy whole-time skip is replaced by per-dose marks
+        doses.map { it.time.toString() }.distinct().forEach { t ->
+            if (t in skippedSet()) e.putStringSet("skipped", HashSet(skippedSet()).apply { remove(t) })
+        }
+        if (status != -1 && doses.any { isSkipped(it.time) }) {
+            // other doses of a skipped time keep their "not taken" mark
+            Schedule.dosesAt(doses.first().time).filter { it !in doses }.forEach { m.add(it.key) }
+            e.putStringSet("missed", m)
+        }
+        e.commit(); bump()
+        return low
+    }
+
     fun slotDone(slot: LocalDateTime): Boolean {
         val doses = Schedule.dosesAt(slot)
-        return doses.isNotEmpty() && doses.all { isDone(it) }
+        return doses.isNotEmpty() && doses.all { isMarked(it) }
     }
 
     /** Site to use: the one recorded for a done dose, else the next one in the rotation. */
